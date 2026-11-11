@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SmartHatch Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Reset & Base */
+:root, :root[data-theme="light"] {
+  --bg:#edf2ef; --surface:#ffffff; --surface2:#e2eae6; --ink:#14302a; --muted:#566f68; --line:#cddad4;
+  --yolk:#f2a516; --temp:#d94a24; --hum:#1f72b4;
+  --ok:#2a8f58; --warn:#b97c06; --bad:#d23b3b; --cold:#2f78bd;
+  --f-display:'Fredoka','Trebuchet MS',sans-serif; --f-body:'Figtree',system-ui,sans-serif; --f-mono:'IBM Plex Mono',ui-monospace,monospace;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg:#0d1816; --surface:#152421; --surface2:#1e312d; --ink:#e4f0ec; --muted:#93aaa3; --line:#2a403b;
+  --yolk:#f5b83a; --temp:#ff7a52; --hum:#5aaeea; --ok:#4cc582; --warn:#e8b040; --bad:#ff6b6b; --cold:#6aaef0;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+body {
+  margin:0; background:var(--bg); color:var(--ink); font-family:var(--f-body); font-size:14px; line-height:1.45;
+  padding-top:max(20px, env(safe-area-inset-top, 0px));
+  padding-bottom:max(40px, env(safe-area-inset-bottom, 0px));
+  padding-left:max(16px, env(safe-area-inset-left, 0px));
+  padding-right:max(16px, env(safe-area-inset-right, 0px));
+  transition: background-color 0.3s, color 0.3s;
+}
+img{max-width:100%}
+[hidden]:not([hidden=until-found i]){display:none!important}
+
+/* Layout */
+.page { max-width:1280px; margin:0 auto; display:flex; flex-direction:column; gap:20px; }
+button { font-family:inherit; cursor:pointer; }
+button:focus-visible { outline:2px solid var(--yolk); outline-offset:2px; }
+
+header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:16px 24px; padding-bottom: 8px; }
+.brand { display:flex; align-items:center; gap:16px; min-width:0; }
+.brand svg { flex:none; width: 48px; height: 48px; }
+h1 { font:600 28px/1.1 var(--f-display); margin:0; text-wrap:balance; }
+.sub { color:var(--muted); font-size:14px; margin-top:2px; }
+.clock { text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+.clock .t { font:500 32px/1 var(--f-mono); font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+.clock .d { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; align-items:center; }
+.chip { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 12px; font-size:12.5px; font-weight:600; background:var(--surface2); color:var(--ink); transition: background-color 0.3s, color 0.3s, border-color 0.3s; }
+
+.grid { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:20px; align-items:start; }
+@media (max-width:960px) { .grid { grid-template-columns:minmax(0,1fr); } }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:20px; min-width:0; transition: background-color 0.3s, border-color 0.3s; }
+.card h2 { font:600 18px/1.2 var(--f-display); margin:0 0 16px; }
+.stack { display:flex; flex-direction:column; gap:20px; min-width:0; }
+
+/* Stage & Sensors */
+.stage { position:relative; overflow:hidden; border-radius:16px 16px 0 0; background:#0b1330; }
+.stage svg { display:block; width:100%; height:auto; }
+.pill { position:absolute; top:14px; right:14px; display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:999px; font-weight:600; font-size:13px; background:var(--surface); color:var(--ink); border:1px solid var(--line); transition: background-color 0.3s, border-color 0.3s; }
+.pill i { width:10px; height:10px; border-radius:50%; background:var(--ok); }
+.pill[data-s=warn] i { background:var(--warn); } .pill[data-s=hot] i { background:var(--bad); } .pill[data-s=cold] i { background:var(--cold); }
+.scene-card { padding:0; overflow:hidden; }
+.reads { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0; }
+.read { padding:20px; }
+.read+.read { border-left:1px solid var(--line); }
+@media (max-width:540px) { .read+.read { border-left:0; border-top:1px solid var(--line); } .reads { grid-template-columns:minmax(0,1fr); } }
+.lbl { font-size:12px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
+.val { font:600 52px/1.05 var(--f-display); margin-top:4px; font-variant-numeric:tabular-nums; }
+.val small { font-size:24px; font-weight:500; color:var(--muted); margin-left:4px; }
+.val.t { color:var(--temp); } .val.h { color:var(--hum); }
+.note { color:var(--muted); font-size:13.5px; margin-top:2px; }
+.gauge { position:relative; height:10px; border-radius:5px; background:var(--surface2); margin:18px 8px 6px; transition: background-color 0.3s; }
+.gauge .band { position:absolute; top:0; bottom:0; background:var(--ok); opacity:.35; border-radius:5px; }
+.gauge .mk { position:absolute; top:50%; width:18px; height:18px; margin:-9px 0 0 -9px; border-radius:50%; background:var(--c); border:3px solid var(--surface); box-shadow:0 0 0 1px var(--line); transition: left .6s, border-color 0.3s; }
+.gscale { display:flex; justify-content:space-between; font:400 11.5px var(--f-mono); color:var(--muted); margin:0 0 0; }
+
+/* Control & Actuators */
+.pid { display:flex; flex-direction:column; }
+.pid-row { display:grid; grid-template-columns:48px minmax(0,1fr) auto; align-items:baseline; gap:10px; padding:12px 0; border-top:1px solid var(--line); }
+.pid-row:first-of-type { border-top:0; padding-top:0; }
+.pid-row b { font:500 22px var(--f-mono); }
+.pid-row span { color:var(--muted); font-size:13.5px; }
+.pid-row em { font:600 28px var(--f-display); font-style:normal; font-variant-numeric:tabular-nums; }
+.kv { display:flex; justify-content:space-between; align-items:baseline; padding:12px 0; border-top:1px solid var(--line); }
+.kv b { font:600 20px var(--f-display); font-variant-numeric:tabular-nums; }
+.bar { height:10px; border-radius:5px; background:var(--surface2); overflow:hidden; margin-top:8px; transition: background-color 0.3s; }
+.bar i { display:block; height:100%; width:0; background:var(--yolk); border-radius:5px; transition:width .6s; }
+
+.seg { display:inline-flex; flex-wrap:wrap; border:1px solid var(--line); border-radius:10px; padding:4px; gap:4px; background:var(--surface2); transition: background-color 0.3s, border-color 0.3s; }
+.seg button { border:0; background:transparent; padding:8px 16px; border-radius:7px; font-weight:600; font-size:13px; color:var(--muted); transition: background-color 0.2s, color 0.2s; }
+.seg button[aria-pressed="true"] { background:var(--surface); color:var(--ink); box-shadow:0 1px 4px rgba(0,0,0,.15); }
+:root[data-theme="dark"] .seg button[aria-pressed="true"] { box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.hint { color:var(--muted); font-size:13px; margin:4px 0 0; }
+.hint.warn { color:var(--warn); font-weight: 500; }
+.spbox { margin-top:16px; display:flex; flex-direction:column; gap:8px; }
+.spl { display:flex; justify-content:space-between; align-items:baseline; }
+.spl b { font:600 28px var(--f-display); font-variant-numeric:tabular-nums; }
+input[type=range] { width:100%; accent-color:var(--yolk); height:28px; margin:0; cursor:pointer; }
+input[type=range]:disabled { opacity:.45; cursor:not-allowed; }
+
+.act { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 0; border-top:1px solid var(--line); }
+.act:first-of-type { border-top:0; padding-top:0; }
+.act b { display:block; font-weight:600; font-size:14.5px; margin-bottom: 2px;}
+.act .s { color:var(--muted); font-size:13px; }
+.act>div { min-width:0; }
+.av { font:600 22px var(--f-display); font-variant-numeric:tabular-nums; }
+.sw { flex:none; width:50px; height:28px; border-radius:999px; border:1px solid var(--line); background:var(--surface2); position:relative; padding:0; transition:background .3s, border-color .3s; }
+.sw i { position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%; background:var(--muted); transition:transform .3s, background .3s; }
+.sw[aria-checked=true] { background:var(--yolk); border-color:var(--yolk); }
+.sw[aria-checked=true] i { transform:translateX(22px); background:#fff; }
+.sw:disabled { opacity:.55; cursor:not-allowed; }
+
+/* Charts */
+.chart-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:16px; margin-bottom:12px; }
+.chart-head h2 { margin:0; }
+.ctrls { display:flex; flex-wrap:wrap; gap:12px; }
+.plot { position:relative; }
+.plot svg { display:block; width:100%; height:auto; touch-action:pan-y; }
+.gl { stroke:var(--line); stroke-width:1; }
+.ax { fill:var(--muted); font:11.5px var(--f-mono); }
+.tip { position:absolute; pointer-events:none; background:var(--ink); color:var(--bg); padding:8px 12px; border-radius:8px; font-size:13px; white-space:nowrap; transform:translate(-50%,-100%); display:none; z-index: 10; }
+.tip b { font:600 16px var(--f-display); display:block; margin-bottom: 2px; }
+.stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px; border-top:1px solid var(--line); padding-top:16px; }
+.stats b { display:block; font:600 24px var(--f-display); font-variant-numeric:tabular-nums; margin-top: 4px; }
+
+/* ===== Adegan ayam ===== */
+#scene{--hen:#dd9a45;--hen2:#bb7330;--hen3:#9a5a22;--comb:#d8402f;--beak:#f2b134;--blush:#ff8fa3;--blushO:.55;--hen-l:#f2c47a;--glow:#ffd27a;--lamp:.4;--sun:#ffd04a;
+  --sky1:#3fa7e8;--sky2:#bfe6fb;--hill1:#7cc36a;--hill2:#63b058;--ground:#b09a58;--fence:#e4d4ac}
+#scene[data-phase=pagi]{--sky1:#6cc0ee;--sky2:#ffe0b0;--hill1:#9bcb84;--hill2:#7fb86d;--ground:#b9a25f;--fence:#d8c7a0;--sun:#ffb24a}
+#scene[data-phase=sore]{--sky1:#6f7fc4;--sky2:#ffb877;--hill1:#8c9b58;--hill2:#6f8a4c;--ground:#a68b52;--fence:#c7ab7a;--sun:#ff7a3a}
+#scene[data-phase=malam]{--sky1:#0b1330;--sky2:#26346b;--hill1:#1d3a3a;--hill2:#17302f;--ground:#2b3a33;--fence:#4a5a56}
+#scene[data-mood=cold]{--hen:#9fb6d6;--hen2:#7f98bd;--hen3:#6a82a8;--comb:#6f9ad0;--beak:#d4c48a;--hen-l:#c7d6ec;--glow:#8fc4ff;--blush:#a9d0f7;--blushO:.7}
+#scene[data-mood=hot]{--hen:#e8773a;--hen2:#c4562a;--hen3:#a2431f;--comb:#e0261f;--hen-l:#f3a06a;--glow:#ff6a3a;--blush:#ff3b2e;--blushO:.9}
+.s1{stop-color:var(--sky1);transition:stop-color 1.2s}.s2{stop-color:var(--sky2);transition:stop-color 1.2s}
+.hill1{fill:var(--hill1);transition:fill 1.2s}.hill2{fill:var(--hill2);transition:fill 1.2s}.ground{fill:var(--ground);transition:fill 1.2s}.fence{fill:var(--fence);transition:fill 1.2s}
+.sun-core{fill:var(--sun);transition:fill 1.2s}
+.sun,.moon{transition:transform 1.4s ease-in-out,opacity 1s}
+.cloud{fill:#fff;opacity:.92;transition:opacity 1s;animation:drift 38s linear infinite}
+.cloud.c2{animation-duration:55s;animation-delay:-20s}
+@keyframes drift{from{transform:translateX(-160px)}to{transform:translateX(760px)}}
+#scene[data-phase=malam] .cloud{opacity:.1}
+.stars{opacity:0;transition:opacity 1s}
+#scene[data-phase=malam] .stars{opacity:1}
+.stars circle{animation:tw 3s ease-in-out infinite}
+@keyframes tw{50%{opacity:.25}}
+.f-hen{fill:var(--hen);transition:fill .6s}.f-hen2{fill:var(--hen2);transition:fill .6s}.f-comb{fill:var(--comb);transition:fill .6s}.f-beak{fill:var(--beak);transition:fill .6s}
+.f-blush{fill:var(--blush);opacity:var(--blushO);transition:opacity .6s}
+.s-hen3{stroke:var(--hen3);fill:none;stroke-width:2.5;stroke-linecap:round}
+.breath{transform-box:fill-box;transform-origin:50% 100%;animation:breath 3.4s ease-in-out infinite}
+@keyframes breath{50%{transform:scale(1.012,1.024)}}
+#scene[data-mood=cold] .shiver{animation:shiver .11s linear infinite}
+@keyframes shiver{0%,100%{transform:translate(-1.6px,0)}50%{transform:translate(1.6px,.8px)}}
+.lid{fill:var(--hen);transform-box:fill-box;transform-origin:50% 0;transform:scaleY(0);transition:transform .3s}
+#scene[data-eyes=open] .lid{animation:blink 5s infinite}
+@keyframes blink{0%,92%,100%{transform:scaleY(0)}95%{transform:scaleY(1)}}
+#scene[data-eyes=closed] .lid{transform:scaleY(1)}
+#scene[data-eyes=droopy] .lid{transform:scaleY(.5)}
+.lidline{fill:none;stroke:#2a1a10;stroke-width:2.4;stroke-linecap:round;opacity:0;transition:opacity .3s}
+#scene[data-eyes=closed] .lidline{opacity:1}
+.jaw{transform-box:view-box}
+#scene[data-mood=hot] .jaw{animation:pant .5s ease-in-out infinite alternate}
+#scene[data-mood=cold] .jaw{animation:chat .09s linear infinite alternate}
+@keyframes pant{to{transform:translateY(7px)}}@keyframes chat{to{transform:translateY(3px)}}
+.wing{transform-box:fill-box;transform-origin:50% 8%}
+#scene[data-mood=hot] .wingL{animation:fanL .3s ease-in-out infinite alternate}#scene[data-mood=hot] .wingR{animation:fanR .3s ease-in-out infinite alternate}
+@keyframes fanL{to{transform:rotate(24deg)}}@keyframes fanR{to{transform:rotate(-24deg)}}
+.fx{opacity:0;transition:opacity .5s}
+#scene[data-mood=cold] .fx-cold,#scene[data-mood=hot] .fx-hot{opacity:1}
+.scarf{opacity:0;transition:opacity .5s}#scene[data-mood=cold] .scarf{opacity:1}
+.flake{fill:#fff;animation:snow 3.2s linear infinite}
+@keyframes snow{from{transform:translate(0,-20px)}to{transform:translate(14px,250px)}}
+.puff{fill:#fff;opacity:0;animation:puff 1.9s ease-out infinite}
+@keyframes puff{from{opacity:.8;transform:translate(0,0) scale(.4)}to{opacity:0;transform:translate(34px,-14px) scale(1.7)}}
+.sweat{fill:#7fd4ff;opacity:0;animation:drop 1.3s ease-in infinite}
+@keyframes drop{0%{opacity:0;transform:translateY(0)}20%{opacity:1}100%{opacity:0;transform:translateY(40px)}}
+.wave{fill:none;stroke:#ff8a5c;stroke-width:3;stroke-linecap:round;opacity:0;animation:rise 1.8s ease-in infinite}
+@keyframes rise{0%{opacity:0;transform:translateY(0)}30%{opacity:.8}100%{opacity:0;transform:translateY(-34px)}}
+.zzz{opacity:0;transition:opacity .5s;font:600 22px var(--f-display);fill:#e8ecff}
+#scene[data-sleep=true] .zzz{opacity:1}
+.zzz text{animation:zf 2.6s ease-in-out infinite}
+@keyframes zf{0%{transform:translate(0,6px);opacity:0}30%{opacity:1}100%{transform:translate(10px,-18px);opacity:0}}
+.f-henl{fill:var(--hen-l);transition:fill .6s}
+.glow{transition:opacity .6s}
+.pet{transform-box:view-box;transform-origin:300px 300px;cursor:pointer}
+.head{transform-box:view-box;transform-origin:300px 186px}
+#pups{transition:transform .12s}
+.happy{fill:none;stroke:#2a1a10;stroke-width:2.6;stroke-linecap:round;opacity:0;transition:opacity .2s}
+#scene[data-happy=true] .happy{opacity:1}
+#scene[data-happy=true] .lid{transform:scaleY(1)!important;animation:none!important}
+#scene[data-happy=true] .lidline{opacity:0!important}
+#scene.jump .pet{animation:bounce .7s ease-out}
+@keyframes bounce{0%{transform:scale(1.06,.92)}35%{transform:translateY(-16px) scale(.97,1.05)}70%{transform:scale(1.04,.95)}100%{transform:none}}
+#scene.flap .wingL{animation:fanL .16s ease-in-out 5 alternate}
+#scene.flap .wingR{animation:fanR .16s ease-in-out 5 alternate}
+#scene.tilt .head{animation:tilt 1.2s ease-in-out}
+@keyframes tilt{0%,100%{transform:rotate(0)}30%,70%{transform:rotate(-9deg)}}
+#scene.peck .head{animation:peck 1.1s ease-in-out}
+@keyframes peck{0%,70%,100%{transform:translateY(0)}20%,55%{transform:translateY(8px)}35%{transform:translateY(0)}}
+.egg{transform-box:fill-box;transform-origin:50% 50%;cursor:pointer}
+.egg.wob{animation:wob .65s ease-in-out}
+@keyframes wob{0%,100%{transform:rotate(0)}20%{transform:rotate(-9deg)}40%{transform:rotate(8deg)}60%{transform:rotate(-5deg)}80%{transform:rotate(3deg)}}
+.egg.turn{animation:turn 1.1s ease-in-out}
+@keyframes turn{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.heart{fill:#ff5c7a;transform-box:fill-box;transform-origin:center;animation:hup 1.4s ease-out forwards}
+@keyframes hup{0%{opacity:0;transform:translateY(0) scale(.4)}15%{opacity:1}100%{opacity:0;transform:translateY(-56px) scale(1.2)}}
+.ov{position:absolute;left:14px;right:14px;bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;pointer-events:none}
+.ov>*{pointer-events:auto}
+.ovr{display:flex;gap:8px;flex-wrap:wrap}
+.hintc{background:var(--surface);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:500; transition: background-color 0.3s, border-color 0.3s;}
+.mini{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 14px;font:600 13px var(--f-body);cursor:pointer; transition: background-color 0.3s, border-color 0.3s;}
+.mini:hover{border-color:var(--yolk)}
+.devs{pointer-events:none}
+.cap{fill:#fff;font:600 12px Figtree,system-ui,sans-serif;text-anchor:middle}
+.capbg{fill:rgba(12,22,20,.7)}
+.cone{opacity:calc(var(--lamp)*.85);transition:opacity .6s}
+.bglow{opacity:var(--lamp);transform-box:fill-box;transform-origin:center;transform:scale(calc(.55 + var(--lamp)*.65));transition:opacity .6s,transform .6s}
+.bon{opacity:var(--lamp);transition:opacity .6s}
+.blades,.gear{transform-box:view-box}
+.blades{transform-origin:70px 170px}
+.gear{transform-origin:522px 280px}
+#scene[data-fan=on] .blades{animation:spin .28s linear infinite}
+#scene[data-motor=on] .gear{animation:spin 1.2s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.wind{fill:none;stroke:#fff;stroke-width:3;stroke-linecap:round;stroke-dasharray:14 22;opacity:0;transition:opacity .4s}
+#scene[data-fan=on] .wind{opacity:.8;animation:windmove .7s linear infinite}
+@keyframes windmove{to{stroke-dashoffset:-36}}
+.led{fill:#6b7a84}
+#scene[data-motor=on] .led{fill:#4cd37f}
+#scene[data-motor=on] .egg{animation:turn 2.4s ease-in-out infinite}
+#scene[data-motor=on] .egg:nth-child(2){animation-delay:.2s}
+#scene[data-motor=on] .egg:nth-child(3){animation-delay:.4s}
+#scene[data-motor=on] .egg:nth-child(4){animation-delay:.6s}
+
+@media (prefers-reduced-motion:reduce){#scene *{animation:none!important}}
+
+/* ===== Penyempurnaan tata letak (desktop, tablet, ponsel) ===== */
+button.chip { border:1px solid var(--line); color:var(--ink); background:var(--surface); font-size:12.5px; line-height:1.2; }
+button.chip:hover { border-color:var(--yolk); }
+.page { max-width:1440px; }
+.grid { grid-template-columns:minmax(0,1.65fr) minmax(340px,1fr); align-items:stretch; }
+.stack > .scene-card { flex:1; display:flex; flex-direction:column; }
+.reads { flex:1; }
+.read { display:flex; flex-direction:column; justify-content:center; }
+.val { font-size:clamp(40px,4.6vw,64px); }
+.read { padding:28px 24px; }
+.gauge { margin-top:22px; }
+input[type=range] { -webkit-appearance:none; appearance:none; background:transparent; height:28px; }
+input[type=range]::-webkit-slider-runnable-track { height:8px; border-radius:4px; background:linear-gradient(to right,var(--yolk) var(--fill,50%),var(--surface2) var(--fill,50%)); }
+input[type=range]::-moz-range-track { height:8px; border-radius:4px; background:var(--surface2); }
+input[type=range]::-moz-range-progress { height:8px; border-radius:4px; background:var(--yolk); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; margin-top:-7px; border-radius:50%; background:var(--yolk); border:3px solid var(--surface); box-shadow:0 0 0 1px var(--line); }
+input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--yolk); border:3px solid var(--surface); box-shadow:0 0 0 1px var(--line); }
+.strip { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px 12px; padding:12px 20px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.strip .pill { position:static; }
+.ovr { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.saym { display:none; }
+.dchips { display:none; }
+.dchip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; background:var(--surface2); font-size:12.5px; font-weight:600; }
+.dchip i { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+.dchip[data-on=true] i { background:var(--ok); }
+.stats b { font-size:clamp(17px,4.6vw,24px); }
+.plot svg { overflow:visible; }
+
+@media (max-width:960px) {
+  .grid { grid-template-columns:minmax(0,1fr); }
+  .stack > .scene-card { flex:none; }
+  .reads { flex:none; }
+}
+@media (min-width:601px) and (max-width:960px) {
+  .side { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
+  .side .pid { grid-column:1 / -1; }
+}
+@media (max-width:600px) {
+  body { font-size:14px; }
+  .page { gap:16px; }
+  .stack { gap:16px; }
+  .grid { gap:16px; }
+  header { flex-direction:column; align-items:stretch; gap:12px; }
+  .brand svg { width:40px; height:40px; }
+  h1 { font-size:24px; }
+  .clock { align-items:flex-start; text-align:left; }
+  .clock .t { font-size:30px; }
+  .clock .d { justify-content:flex-start; }
+  .card { padding:16px; border-radius:14px; }
+  .scene-card { padding:0; }
+  .stage { border-radius:14px 14px 0 0; }
+  .bubble, .devs .cap, .devs .capbg { display:none; }
+  .saym { display:block; margin:12px 16px 0; padding:8px 14px; border-radius:14px; background:var(--surface2); font:500 16px/1.3 var(--f-display); text-align:center; }
+  .strip { padding:12px 16px; border-top:0; }
+  .dchips { display:flex; flex-wrap:wrap; gap:8px; width:100%; }
+  .read { padding:16px; }
+  .read + .read { border-left:0; border-top:1px solid var(--line); }
+  .card h2 { margin-bottom:12px; }
+  .chart-head { gap:12px; }
+  .ctrls { width:100%; gap:8px; }
+  .ctrls .seg, .card > .seg { display:flex; width:100%; }
+  .ctrls .seg button, .card > .seg button { flex:1; padding:8px 6px; }
+  .pid-row { grid-template-columns:40px minmax(0,1fr) auto; }
+  .pid-row em { font-size:24px; }
+  .stats { gap:8px; }
+  .tip { font-size:12px; padding:6px 10px; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 44 44" aria-hidden="true"><ellipse cx="22" cy="24" rx="14" ry="18" fill="#f6ecd8" stroke="#d6c39c" stroke-width="2"/><circle cx="22" cy="27" r="7" fill="#f2a516"/></svg>
+    <div><h1>SmartHatch Monitor</h1><div class="sub">Inkubator telur · Kabin 1</div></div>
+  </div>
+  <div class="clock">
+    <div class="t" id="clk">--:--:--</div>
+    <div class="d">
+      <button id="btnTheme" class="chip" type="button" aria-label="Ganti tema"><span id="themeIcon">☀️</span> Tema</button>
+      <span class="chip" id="phaseChip">--</span>
+      <span class="chip" id="dt" style="font-weight: 500;">--</span>
+    </div>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="stack">
+    <section class="card scene-card" aria-label="Kondisi kabin">
+      <div class="stage">
+        <svg id="scene" viewBox="0 0 600 340" role="img" aria-label="Ayam mengerami telur" data-phase="siang" data-mood="normal" data-eyes="open" data-sleep="false" data-happy="false">
+          <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop class="s1" offset="0"/><stop class="s2" offset="1"/></linearGradient><radialGradient id="glow"><stop offset="0" style="stop-color:var(--glow)" stop-opacity=".55"/><stop offset="1" style="stop-color:var(--glow)" stop-opacity="0"/></radialGradient><radialGradient id="bulbGlow"><stop offset="0" stop-color="#fff0a8"/><stop offset="1" stop-color="#ffb43a" stop-opacity="0"/></radialGradient><linearGradient id="cone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a0" stop-opacity=".9"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></linearGradient></defs>
+          <rect width="600" height="340" fill="url(#sky)"/>
+          <g class="stars" fill="#fff">
+            <circle cx="60" cy="40" r="1.6"/><circle cx="130" cy="95" r="1.2" style="animation-delay:-1s"/><circle cx="210" cy="30" r="1.8" style="animation-delay:-2s"/><circle cx="300" cy="70" r="1.2"/><circle cx="380" cy="28" r="1.6" style="animation-delay:-1.5s"/><circle cx="470" cy="85" r="1.4" style="animation-delay:-.5s"/><circle cx="540" cy="45" r="1.8" style="animation-delay:-2.4s"/><circle cx="90" cy="150" r="1.2"/><circle cx="560" cy="140" r="1.3" style="animation-delay:-1.2s"/><circle cx="250" cy="125" r="1.1" style="animation-delay:-.8s"/>
+          </g>
+          <g class="sun" id="sun" style="transform:translate(300px,70px)"><circle r="48" fill="#ffd36a" opacity=".25"/><circle class="sun-core" r="30"/></g>
+          <g class="moon" id="moon" style="transform:translate(300px,70px);opacity:0"><circle r="26" fill="#f4f1d8"/><circle cx="-8" cy="-6" r="4.5" fill="#d9d5b4"/><circle cx="9" cy="8" r="3.2" fill="#d9d5b4"/><circle cx="6" cy="-10" r="2.2" fill="#d9d5b4"/></g>
+          <g class="cloud" style="transform-box:view-box"><ellipse cx="0" cy="62" rx="34" ry="14"/><ellipse cx="22" cy="52" rx="24" ry="14"/><ellipse cx="-20" cy="54" rx="20" ry="11"/></g>
+          <g class="cloud c2"><ellipse cx="0" cy="112" rx="28" ry="11"/><ellipse cx="18" cy="104" rx="18" ry="11"/></g>
+          <path class="hill1" d="M0 240 Q90 190 190 225 T380 215 T600 228 V340 H0z"/>
+          <path class="hill2" d="M0 266 Q150 236 300 262 T600 250 V340 H0z"/>
+          <g class="fence"><rect x="14" y="236" width="8" height="50" rx="2"/><rect x="58" y="236" width="8" height="50" rx="2"/><rect x="102" y="236" width="8" height="50" rx="2"/><rect x="10" y="248" width="108" height="6" rx="2"/><rect x="10" y="266" width="108" height="6" rx="2"/>
+            <rect x="490" y="236" width="8" height="50" rx="2"/><rect x="534" y="236" width="8" height="50" rx="2"/><rect x="578" y="236" width="8" height="50" rx="2"/><rect x="486" y="248" width="108" height="6" rx="2"/><rect x="486" y="266" width="108" height="6" rx="2"/></g>
+          <rect class="ground" y="288" width="600" height="52"/>
+
+          <ellipse class="glow" cx="300" cy="290" rx="200" ry="80" fill="url(#glow)"/>
+          <g class="shiver"><g class="pet"><g class="breath">
+            <ellipse class="f-hen" cx="300" cy="236" rx="114" ry="70"/>
+            <ellipse class="f-henl" cx="300" cy="262" rx="72" ry="40"/>
+            <path class="s-hen3" d="M268 258 q10 8 20 0 M312 258 q10 8 20 0 M290 278 q10 8 20 0" opacity=".6"/>
+            <g class="wing wingL"><ellipse class="f-hen2" cx="196" cy="242" rx="28" ry="48" transform="rotate(12 196 242)"/><path class="s-hen3" d="M186 228 q8 14 4 34 M200 226 q6 16 2 38"/></g>
+            <g class="wing wingR"><ellipse class="f-hen2" cx="404" cy="242" rx="28" ry="48" transform="rotate(-12 404 242)"/><path class="s-hen3" d="M414 228 q-8 14 -4 34 M400 226 q-6 16 -2 38"/></g>
+            <g class="head">
+              <circle class="f-hen" cx="300" cy="138" r="46"/>
+              <ellipse class="f-comb" cx="300" cy="98" rx="24" ry="8"/><circle class="f-comb" cx="284" cy="94" r="10"/><circle class="f-comb" cx="300" cy="86" r="12"/><circle class="f-comb" cx="316" cy="94" r="10"/>
+              <ellipse class="f-blush" cx="259" cy="157" rx="12" ry="7.5"/><ellipse class="f-blush" cx="341" cy="157" rx="12" ry="7.5"/>
+              <g><circle cx="280" cy="140" r="10" fill="#fff" stroke="#2a1a10" stroke-width="1.5"/><circle cx="320" cy="140" r="10" fill="#fff" stroke="#2a1a10" stroke-width="1.5"/>
+                <g id="pups"><circle cx="280" cy="141" r="6.4" fill="#23140e"/><circle cx="320" cy="141" r="6.4" fill="#23140e"/><circle cx="282.5" cy="138.5" r="2.2" fill="#fff"/><circle cx="322.5" cy="138.5" r="2.2" fill="#fff"/></g>
+                <ellipse class="lid" cx="280" cy="140" rx="11.5" ry="11.5"/><ellipse class="lid" cx="320" cy="140" rx="11.5" ry="11.5"/>
+                <path class="lidline" d="M270 141 q10 8 20 0 M310 141 q10 8 20 0"/>
+                <path class="happy" d="M270 143 q10 -10 20 0 M310 143 q10 -10 20 0"/></g>
+              <ellipse class="f-comb" cx="300" cy="176" rx="6" ry="9"/>
+              <g class="jaw"><polygon class="f-beak" points="292,160 308,160 300,171" style="filter:brightness(.9)"/></g>
+              <polygon class="f-beak" points="290,150 310,150 300,164"/>
+              <g class="fx fx-hot"><path class="sweat" d="M254 112 q6 9 0 14 q-6 -5 0 -14z" style="animation-delay:0s"/><path class="sweat" d="M346 114 q6 9 0 14 q-6 -5 0 -14z" style="animation-delay:.45s"/><path class="sweat" d="M250 142 q6 9 0 14 q-6 -5 0 -14z" style="animation-delay:.9s"/></g>
+            </g>
+            <g class="scarf"><path d="M252 186 Q300 214 348 186 L356 204 Q300 238 244 204 Z" fill="#2f78bd"/><path d="M256 195 Q300 223 346 195" stroke="#fff" stroke-width="3" fill="none" opacity=".75"/><path d="M320 214 L328 258 L350 252 L342 210 Z" fill="#2f78bd"/><path d="M326 238 L346 233" stroke="#fff" stroke-width="3" opacity=".75"/></g>
+          </g></g></g>
+
+          <g class="eggs">
+            <g class="egg"><ellipse cx="178" cy="300" rx="19" ry="25" transform="rotate(-12 178 300)" fill="#fbf3e4" stroke="#d6c39c" stroke-width="2"/><circle cx="172" cy="294" r="2.2" fill="#d3bd8f"/><circle cx="185" cy="307" r="1.8" fill="#d3bd8f"/></g>
+            <g class="egg"><ellipse cx="236" cy="312" rx="19" ry="25" fill="#f8ecd6" stroke="#d6c39c" stroke-width="2"/><circle cx="230" cy="304" r="2.2" fill="#d3bd8f"/><circle cx="243" cy="318" r="1.8" fill="#d3bd8f"/></g>
+            <g class="egg"><ellipse cx="364" cy="312" rx="19" ry="25" fill="#fbf3e4" stroke="#d6c39c" stroke-width="2"/><circle cx="370" cy="304" r="2.2" fill="#d3bd8f"/><circle cx="357" cy="318" r="1.8" fill="#d3bd8f"/></g>
+            <g class="egg"><ellipse cx="422" cy="300" rx="19" ry="25" transform="rotate(12 422 300)" fill="#f8ecd6" stroke="#d6c39c" stroke-width="2"/><circle cx="428" cy="294" r="2.2" fill="#d3bd8f"/><circle cx="415" cy="307" r="1.8" fill="#d3bd8f"/></g>
+          </g>
+          <ellipse cx="298" cy="322" rx="156" ry="26" fill="#c9a24a"/>
+          <path d="M150 320 q18 -14 36 -4 M200 332 q20 -10 40 0 M262 336 q24 -8 46 0 M330 332 q20 -10 42 -2 M400 322 q18 -12 40 -2 M170 308 l14 8 M420 306 l-14 10 M290 338 l8 -6" stroke="#a67f2e" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+          <g class="devs">
+            <g class="fanunit">
+              <rect x="67" y="206" width="6" height="84" fill="#44515a"/><rect x="48" y="286" width="44" height="6" rx="3" fill="#44515a"/>
+              <circle cx="70" cy="170" r="38" fill="#3b4a56" stroke="#2a363f" stroke-width="3"/>
+              <circle cx="70" cy="170" r="33" fill="#cfd8dc" opacity=".16"/>
+              <g class="blades"><ellipse cx="70" cy="151" rx="8" ry="18" fill="#e7eef1"/><ellipse cx="70" cy="151" rx="8" ry="18" fill="#e7eef1" transform="rotate(120 70 170)"/><ellipse cx="70" cy="151" rx="8" ry="18" fill="#e7eef1" transform="rotate(240 70 170)"/></g>
+              <circle cx="70" cy="170" r="7" fill="#7a8a94"/>
+              <path class="wind" d="M112 150 H170"/><path class="wind" d="M118 170 H178" style="animation-delay:-.25s"/><path class="wind" d="M112 190 H170" style="animation-delay:-.5s"/>
+              <rect class="capbg" x="32" y="112" width="76" height="17" rx="8.5"/><text class="cap" id="capFan" x="70" y="124">Kipas OFF</text>
+            </g>
+            <g class="motorunit">
+              <path d="M492 286 L446 302" stroke="#44515a" stroke-width="5" stroke-linecap="round"/>
+              <rect x="490" y="258" width="64" height="44" rx="6" fill="#3b4a56" stroke="#2a363f" stroke-width="3"/>
+              <g class="gear"><circle cx="522" cy="280" r="13" fill="#9fb0ba"/><path d="M522 264 v6 M522 290 v6 M506 280 h6 M532 280 h6 M510.7 268.7 l4.2 4.2 M529.1 287.1 l4.2 4.2 M510.7 291.3 l4.2 -4.2 M529.1 272.9 l4.2 -4.2" stroke="#9fb0ba" stroke-width="5" stroke-linecap="round"/><circle cx="522" cy="280" r="4" fill="#3b4a56"/></g>
+              <circle class="led" cx="546" cy="266" r="3.5"/>
+              <rect class="capbg" x="484" y="238" width="76" height="17" rx="8.5"/><text class="cap" id="capMot" x="522" y="250">Motor OFF</text>
+            </g>
+            <g class="lamp" transform="rotate(28 510 8)">
+              <polygon class="cone" points="492,60 528,60 566,262 454,262" fill="url(#cone)"/>
+              <circle class="bglow" cx="510" cy="62" r="46" fill="url(#bulbGlow)"/>
+              <line x1="510" y1="0" x2="510" y2="34" stroke="#44515a" stroke-width="3"/>
+              <path d="M478 56 Q510 10 542 56 Z" fill="#4b5a64" stroke="#2f3a41" stroke-width="2"/><rect x="478" y="54" width="64" height="6" rx="3" fill="#3a464e"/>
+              <circle cx="510" cy="63" r="10" fill="#6b4a2a"/><circle class="bon" cx="510" cy="63" r="10" fill="#fff2b0"/>
+            </g>
+            <rect class="capbg" x="515" y="70" width="80" height="17" rx="8.5"/><text class="cap" id="capLamp" x="555" y="82">Lampu 0%</text>
+          </g>
+
+          <g class="fx fx-cold">
+            <circle class="flake" cx="120" cy="40" r="3"/><circle class="flake" cx="190" cy="10" r="2.4" style="animation-delay:-1s"/><circle class="flake" cx="270" cy="30" r="3" style="animation-delay:-2s"/><circle class="flake" cx="350" cy="0" r="2.4" style="animation-delay:-.6s"/><circle class="flake" cx="430" cy="25" r="3" style="animation-delay:-1.6s"/><circle class="flake" cx="500" cy="5" r="2.4" style="animation-delay:-2.6s"/><circle class="flake" cx="80" cy="0" r="2" style="animation-delay:-2.2s"/><circle class="flake" cx="550" cy="40" r="2.8" style="animation-delay:-.2s"/>
+            <circle class="puff" cx="312" cy="172" r="9"/><circle class="puff" cx="312" cy="172" r="9" style="animation-delay:-.95s"/>
+          </g>
+          <g class="fx fx-hot" fill="none">
+            <path class="wave" d="M160 214 q10 -10 0 -20 q-10 -10 0 -20" style="animation-delay:0s"/><path class="wave" d="M440 214 q10 -10 0 -20 q-10 -10 0 -20" style="animation-delay:.6s"/><path class="wave" d="M474 160 q10 -10 0 -20 q-10 -10 0 -20" style="animation-delay:1.2s"/>
+          </g>
+          <g class="zzz"><text x="356" y="100">z</text><text x="356" y="100" style="animation-delay:-.9s">Z</text><text x="356" y="100" style="animation-delay:-1.8s">z</text></g>
+          <g id="fxLayer"></g>
+
+          <g class="bubble">
+            <rect x="28" y="28" width="250" height="52" rx="16" fill="#fff" stroke="#1c2b27" stroke-width="2"/>
+            <path d="M200 79 L236 106 L236 79" fill="#fff"/><path d="M200 80 L236 106 L236 80" fill="#fff" stroke="#1c2b27" stroke-width="2" stroke-linejoin="round"/><rect x="201" y="77" width="34" height="5" fill="#fff"/>
+            <text id="say" x="153" y="60" text-anchor="middle" font-family="Fredoka,sans-serif" font-weight="500" font-size="18" fill="#1c2b27">Menghubungkan...</text>
+          </g>
+        </svg>
+      </div>
+      <div class="saym" id="sayM" aria-live="polite"></div>
+      <div class="strip">
+        <span class="pill" id="pill" data-s="warn" aria-live="polite"><i></i><span id="pillT">Menunggu data</span></span>
+        <div class="ovr"><span class="hintc" id="hint">Ketuk ayam atau telurnya</span><button class="mini" id="btnSnd" type="button">Suara: mati</button></div>
+        <div class="dchips" aria-label="Status aktuator">
+          <span class="dchip" id="dLamp" data-on="false"><i></i><span id="dLampT">Lampu --%</span></span>
+          <span class="dchip" id="dFan" data-on="false"><i></i><span id="dFanT">Kipas OFF</span></span>
+          <span class="dchip" id="dMot" data-on="false"><i></i><span id="dMotT">Motor OFF</span></span>
+        </div>
+      </div>
+      <div class="reads">
+        <div class="read">
+          <div class="lbl">Suhu kabin</div>
+          <div class="val t"><span id="vt">--</span><small>°C</small></div>
+          <div class="note" id="dT">Setpoint -- °C</div>
+          <div class="gauge" style="--c:var(--temp)" id="gT"><div class="band"></div><div class="mk"></div></div>
+          <div class="gscale"><span id="gTa">--</span><span id="gTb">--</span></div>
+        </div>
+        <div class="read">
+          <div class="lbl">Kelembaban kabin</div>
+          <div class="val h"><span id="vh">--</span><small>%RH</small></div>
+          <div class="note" id="dH">Target 55–65 %RH</div>
+          <div class="gauge" style="--c:var(--hum)" id="gH"><div class="band"></div><div class="mk"></div></div>
+          <div class="gscale"><span>40</span><span>80</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack side">
+    <section class="card" aria-label="Mode kendali">
+      <h2>Mode kendali</h2>
+      <div class="seg" id="segMode"><button aria-pressed="false" data-v="auto" disabled>Otomatis</button><button aria-pressed="false" data-v="manual" disabled>Manual</button></div>
+      <div class="spbox">
+        <div class="spl"><label class="lbl" for="spR">Setpoint suhu</label><b id="spV">-- °C</b></div>
+        <input type="range" id="spR" min="35" max="40" step="0.1" value="37.5" disabled>
+        <div class="gscale"><span>35,0</span><span>40,0</span></div>
+        <p class="hint" id="modeNote">Koneksi sedang dibuat. Menunggu respon dari server.</p>
+      </div>
+    </section>
+    
+    <section class="card" aria-label="Aktuator">
+      <h2>Aktuator ESP</h2>
+      <div class="act"><div><b>Lampu pemanas</b><span class="s">Daya ditentukan oleh PID Controller</span></div><span class="av" id="aLampV">--%</span></div>
+      <div class="act"><div><b>Kipas angin</b><span class="s" id="aFanS">Menunggu data server</span></div><button class="sw" id="swFan" type="button" role="switch" aria-label="Kipas angin" aria-checked="false" disabled><i></i></button></div>
+      <div class="act"><div><b>Motor pembalik telur</b><span class="s" id="aMotS">Menunggu data server</span></div><button class="sw" id="swMot" type="button" role="switch" aria-label="Motor pembalik telur" aria-checked="false" disabled><i></i></button></div>
+    </section>
+    
+    <section class="card pid" aria-label="Parameter kendali">
+      <h2>Parameter kendali PID</h2>
+      <div class="pid-row"><b>Kp</b><span>Proporsional</span><em id="kp">--</em></div>
+      <div class="pid-row"><b>Ki</b><span>Integral</span><em id="ki">--</em></div>
+      <div class="pid-row"><b>Kd</b><span>Derivatif</span><em id="kd">--</em></div>
+      <div class="kv"><span>Setpoint saat ini</span><b id="sp">-- °C</b></div>
+      <div class="kv" style="display:block"><div style="display:flex;justify-content:space-between;align-items:baseline"><span>Daya pemanas (Output)</span><b id="duty">--%</b></div><div class="bar"><i id="dutyBar" style="width:0%"></i></div></div>
+    </section>
+  </div>
+</div>
+
+<section class="card" aria-label="Riwayat pengukuran">
+  <div class="chart-head">
+    <h2>Riwayat pengukuran</h2>
+    <div class="ctrls">
+      <div class="seg" id="segMetric"><button aria-pressed="true" data-v="temp">Suhu</button><button aria-pressed="false" data-v="hum">Kelembaban</button></div>
+      <div class="seg" id="segRange"><button aria-pressed="true" data-v="today">Hari ini</button><button aria-pressed="false" data-v="d3">3 hari</button><button aria-pressed="false" data-v="d7">7 hari</button></div>
+    </div>
+  </div>
+  <div class="plot" id="plot"><div class="tip" id="tip"></div></div>
+  <div class="stats"><div><div class="lbl">Terendah</div><b id="sMin">--</b></div><div><div class="lbl">Rata-rata</div><b id="sAvg">--</b></div><div><div class="lbl">Tertinggi</div><b id="sMax">--</b></div></div>
+</section>
+</div>
+
+<script>
+/* =========================================================
+   PENGATURAN KONEKSI DATABASE (GOOGLE SHEETS / ESP)
+   ========================================================= */
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRnu9I8L-5AC89ttYriW6opfhoRmGDdEanvNb5Mpp6z0T3wqkcSP1F8XmnYhrS0wAjlw/exec"; 
+const FETCH_INTERVAL_MS = 5000; // Frekuensi penarikan data dari server (5 detik)
+const CFG = { warn: 0.5, crit: 1.0, hum: { lo: 55, hi: 65 } };
+
+// State Data Kosong dari awal (Loading State)
+const ioTData = {
+  hasData: false,
+  t: null, h: null, sp: null,
+  kp: null, ki: null, kd: null,
+  duty: 0, fan: false, motor: false, mode: 'auto'
+};
+
+// Data riwayat benar-benar kosong
+let historyData = []; 
+
+/* =========================================================
+   UTILITAS & THEME TOGGLE
+   ========================================================= */
+const $ = s => document.querySelector(s), pad = n => String(n).padStart(2, '0');
+const nf = (v, d = 1) => v !== null && !isNaN(v) ? Number(v).toLocaleString('id-ID', { minimumFractionDigits: d, maximumFractionDigits: d }) : '--';
+const st = { range: 'today', metric: 'temp' };
+
+// Mengatur tema Terang/Gelap
+let currentTheme = localStorage.getItem('sh_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    $('#themeIcon').textContent = theme === 'dark' ? '🌙' : '☀️';
+}
+$('#btnTheme').addEventListener('click', () => {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('sh_theme', currentTheme);
+    applyTheme(currentTheme);
+});
+applyTheme(currentTheme);
+
+/* =========================================================
+   FUNGSI JARINGAN (Ambil & Kirim Perintah)
+   ========================================================= */
+let lastHistorySave = 0;
+
+async function fetchServerData() {
+    if (!GOOGLE_SCRIPT_URL) return;
+    try {
+        const res = await fetch(GOOGLE_SCRIPT_URL + "?action=read");
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Memastikan data tidak kosong
+        if (data && data.temp !== undefined && data.temp !== "") {
+            ioTData.hasData = true;
+            ioTData.t = parseFloat(data.temp) || ioTData.t;
+            ioTData.h = parseFloat(data.hum) || ioTData.h;
+            ioTData.sp = parseFloat(data.sp) || ioTData.sp;
+            ioTData.duty = parseFloat(data.duty) || ioTData.duty;
+            ioTData.kp = parseFloat(data.kp) || ioTData.kp;
+            ioTData.ki = parseFloat(data.ki) || ioTData.ki;
+            ioTData.kd = parseFloat(data.kd) || ioTData.kd;
+            ioTData.fan = !!data.fan;
+            ioTData.motor = !!data.motor;
+            ioTData.mode = data.mode || ioTData.mode;
+            
+            // Simpan riwayat pembacaan lokal (maks 1 per menit untuk chart harian)
+            const n = Date.now();
+            if (n - lastHistorySave >= 60000) {
+                historyData.push([n, ioTData.t, ioTData.h]);
+                if (historyData.length > 2000) historyData.shift(); 
+                lastHistorySave = n;
+                drawChart();
+            }
+            updateUI();
+        }
+    } catch (e) {
+        console.error("Gagal mengambil data dari Google Sheets:", e);
+    }
+}
+
+async function sendCommand(key, value) {
+    if (!GOOGLE_SCRIPT_URL) return;
+    try {
+        await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: "command", key: key, value: value }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (e) {
+        console.error("Gagal mengirim perintah:", e);
+    }
+}
+
+/* =========================================================
+   UI & RENDER LOGIC
+   ========================================================= */
+const PH_N = { pagi: 'Pagi', siang: 'Siang', sore: 'Sore', malam: 'Malam' };
+const scene = $('#scene');
+function fillR() { const r = $('#spR'); r.style.setProperty('--fill', ((r.value - r.min) / (r.max - r.min) * 100) + '%'); }
+function setSay(t) { $('#say').textContent = t; $('#sayM').textContent = t; }
+const phaseOf = h => h >= 5 && h < 10 ? 'pagi' : h >= 10 && h < 15 ? 'siang' : h >= 15 && h < 18 ? 'sore' : 'malam';
+
+function celestial(h) {
+    const day = h >= 5.5 && h < 18.5, p = day ? (h - 5.5) / 13 : ((h >= 18.5 ? h - 18.5 : h + 5.5) / 11);
+    const x = 50 + p * 500, y = 228 - Math.sin(Math.PI * p) * 165, tr = `translate(${x}px,${y}px)`;
+    $('#sun').style.transform = tr; $('#sun').style.opacity = day ? 1 : 0;
+    $('#moon').style.transform = tr; $('#moon').style.opacity = day ? 0 : 1;
+}
+
+function updateUI() {
+    const d = new Date(), real = d.getHours() + d.getMinutes() / 60;
+    $('#clk').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    $('#dt').textContent = d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    const ph = phaseOf(real);
+    $('#phaseChip').textContent = PH_N[ph];
+    scene.dataset.phase = ph;
+    celestial(real);
+
+    // KONDISI LOADING: Saat belum ada data
+    if (!ioTData.hasData) {
+        setSay("Menunggu sambungan ESP...");
+        $('#pill').dataset.s = "warn";
+        $('#pillT').textContent = "Menunggu data";
+        scene.dataset.mood = 'normal';
+        scene.dataset.eyes = 'open';
+        return; 
+    }
+
+    // KONDISI NORMAL: Setelah data diterima
+    const t = ioTData.t, hu = ioTData.h, sp = ioTData.sp;
+    $('#sp').textContent = nf(sp) + ' °C';
+    $('#gTa').textContent = nf(sp - 3); $('#gTb').textContent = nf(sp + 3);
+    $('#kp').textContent = nf(ioTData.kp); $('#ki').textContent = nf(ioTData.ki, 2); $('#kd').textContent = nf(ioTData.kd);
+
+    const dl = t - sp, ad = Math.abs(dl);
+    const mood = dl < -CFG.crit ? 'cold' : dl > CFG.crit ? 'hot' : 'normal';
+    scene.dataset.mood = mood;
+    scene.dataset.eyes = mood === 'cold' ? 'closed' : mood === 'hot' ? 'droopy' : ph === 'malam' ? 'closed' : 'open';
+    scene.dataset.sleep = String(mood === 'normal' && ph === 'malam' && ad <= CFG.warn);
+
+    let say, ps, pt;
+    if (mood === 'cold') { say = 'Brrr… dingin banget!'; ps = 'cold'; pt = 'Terlalu dingin'; }
+    else if (mood === 'hot') { say = 'Haduh, panas banget!'; ps = 'hot'; pt = 'Terlalu panas'; }
+    else if (ad > CFG.warn) { say = dl < 0 ? 'Agak dingin nih…' : 'Mulai gerah nih…'; ps = 'warn'; pt = dl < 0 ? 'Agak dingin' : 'Agak panas'; }
+    else { say = { pagi: 'Pagi! Telurnya hangat.', siang: 'Hangat dan nyaman.', sore: 'Sore tenang, suhu aman.', malam: 'Zzz… suhu aman.' }[ph]; ps = 'ok'; pt = 'Stabil'; }
+
+    if (Date.now() < tapUntil) say = tapMsg;
+    setSay(say);
+    $('#pill').dataset.s = ps; $('#pillT').textContent = pt;
+    $('#vt').textContent = nf(t); $('#vh').textContent = nf(hu, 0);
+    $('#dT').textContent = `${dl >= 0 ? '+' : '−'}${nf(ad, 1)} °C dari setpoint ${nf(sp)} °C`;
+
+    const hs = hu < CFG.hum.lo ? 'di bawah target' : hu > CFG.hum.hi ? 'di atas target' : 'dalam target';
+    $('#dH').textContent = `Target ${CFG.hum.lo}–${CFG.hum.hi} %RH · ${hs}`;
+
+    gauge('#gT', t, sp - 3, sp + 3, sp - CFG.warn, sp + CFG.warn);
+    gauge('#gH', hu, 40, 80, CFG.hum.lo, CFG.hum.hi);
+
+    $('#duty').textContent = nf(ioTData.duty, 0) + '%';
+    $('#dutyBar').style.width = ioTData.duty + '%';
+    
+    actuateUI(ioTData.duty, ioTData.fan, ioTData.motor);
+    modeUI();
+}
+
+function gauge(id, v, lo, hi, b1, b2) {
+    const g = $(id); if(!g || v === null) return;
+    const P = x => Math.max(0, Math.min(100, (x - lo) / (hi - lo) * 100));
+    const b = g.querySelector('.band');
+    b.style.left = P(b1) + '%'; b.style.width = (P(b2) - P(b1)) + '%';
+    g.querySelector('.mk').style.left = P(v) + '%';
+}
+
+function setSw(id, on, dis) {
+    const b = $(id);
+    b.setAttribute('aria-checked', String(on));
+    b.disabled = dis;
+}
+
+function actuateUI(duty, fan, motor) {
+    const a = ioTData.mode === 'auto';
+    scene.dataset.fan = fan ? 'on' : 'off';
+    scene.dataset.motor = motor ? 'on' : 'off';
+    scene.style.setProperty('--lamp', (duty / 100).toFixed(2));
+    
+    $('#capLamp').textContent = 'Lampu ' + nf(duty, 0) + '%';
+    $('#capFan').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF');
+    $('#capMot').textContent = 'Motor ' + (motor ? 'ON' : 'OFF');
+    $('#aLampV').textContent = nf(duty, 0) + '%';
+    $('#dLampT').textContent = 'Lampu ' + nf(duty, 0) + '%'; $('#dLamp').dataset.on = String(duty > 0);
+    $('#dFanT').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF'); $('#dFan').dataset.on = String(!!fan);
+    $('#dMotT').textContent = 'Motor ' + (motor ? 'ON' : 'OFF'); $('#dMot').dataset.on = String(!!motor);
+    
+    setSw('#swFan', fan, a);
+    setSw('#swMot', motor, a);
+    $('#aFanS').textContent = a ? 'Diatur otomatis oleh ESP' : 'Manual · ' + (fan ? 'menyala' : 'mati');
+    $('#aMotS').textContent = a ? 'Diatur otomatis oleh ESP' : 'Manual · ' + (motor ? 'berputar' : 'mati');
+}
+
+/* Mode Control Update */
+function modeUI() {
+    const a = ioTData.mode === 'auto', n = $('#modeNote'), sp = ioTData.sp;
+    
+    // Aktifkan tombol segmen jika ada data
+    document.querySelectorAll('#segMode button').forEach(b => {
+        b.disabled = !ioTData.hasData;
+        if(ioTData.hasData) {
+            b.setAttribute('aria-pressed', b.dataset.v === ioTData.mode);
+        }
+    });
+
+    if(!ioTData.hasData) return;
+
+    $('#spR').disabled = a;
+    $('#spV').textContent = nf(sp) + ' °C';
+    $('#spR').value = sp !== null ? sp : 37.5;
+    fillR();
+    
+    n.className = 'hint';
+    if(a) n.textContent = 'Setpoint diatur otomatis berdasarkan pengaturan pada program ESP.';
+    else if(sp < 37 || sp > 38) { n.textContent = 'Di luar kisaran aman penetasan ayam (37,0–38,0 °C). Daya tetas bisa turun.'; n.classList.add('warn'); }
+    else n.textContent = 'Mode manual. Geser untuk mengatur target suhu baru ke ESP.';
+}
+
+$('#segMode').addEventListener('click', ev => {
+    if(!ioTData.hasData) return;
+    const b = ev.target.closest('button');
+    if (!b || b.dataset.v === ioTData.mode) return;
+    ioTData.mode = b.dataset.v;
+    sendCommand('mode', ioTData.mode);
+    modeUI(); updateUI();
+});
+$('#spR').addEventListener('input', fillR);
+$('#spR').addEventListener('change', ev => {
+    if(!ioTData.hasData) return;
+    ioTData.sp = parseFloat(ev.target.value);
+    sendCommand('sp', ioTData.sp);
+    modeUI(); updateUI();
+});
+$('#swFan').addEventListener('click', () => {
+    if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
+    ioTData.fan = !ioTData.fan;
+    sendCommand('fan', ioTData.fan);
+    updateUI();
+});
+$('#swMot').addEventListener('click', () => {
+    if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
+    ioTData.motor = !ioTData.motor;
+    sendCommand('motor', ioTData.motor);
+    updateUI();
+});
+
+/* =========================================================
+   GRAFIK RIWAYAT DATA
+   ========================================================= */
+let W = 800, H = 300, compact = false;
+const M = { l: 46, r: 16, t: 14, b: 30 };
+function drawChart() {
+    const plot = $('#plot');
+    const cw = Math.round(plot.clientWidth);
+    if (cw > 0) { W = cw; H = W < 520 ? 230 : W < 900 ? 280 : 320; }
+    compact = W < 520;
+    const isT = st.metric === 'temp';
+    const lo = isT ? 34 : 40, hi = isT ? 41 : 80, u = isT ? ' °C' : ' %RH', dec = isT ? 2 : 1;
+
+    // Jika data kosong, gambar frame dasar (garis kisi) tanpa garis grafik (Mencegah tampilan aneh)
+    if (historyData.length === 0) {
+        let emptyGrid = '';
+        let step = isT ? 1 : 10;
+        const Y = v => H - M.b - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (H - M.t - M.b);
+        for (let v = lo; v <= hi + 1e-9; v += step) {
+            emptyGrid += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
+        }
+        emptyGrid += `<text class="ax" x="${W/2}" y="${H/2}" text-anchor="middle" font-size="14">Belum ada data sensor</text>`;
+        plot.querySelector('svg')?.remove();
+        plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})">${emptyGrid}</svg>`);
+        $('#sMin').textContent = '--'; $('#sMax').textContent = '--'; $('#sAvg').textContent = '--';
+        return;
+    }
+
+    const now = Date.now(), d = new Date(), mid = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    let s, e;
+    if (st.range === 'today') { s = mid; e = mid + 864e5; }
+    else { s = now - (st.range === 'd3' ? 3 : 7) * 864e5; e = now; }
+    
+    const filteredPts = historyData.filter(p => p[0] >= s && p[0] <= e);
+    const pts = filteredPts.length > 0 ? filteredPts.map(p => [p[0], isT ? p[1] : p[2]]) : [[now, isT ? ioTData.t : ioTData.h]];
+    
+    const X = t => M.l + (t - s) / (e - s) * (W - M.l - M.r);
+    const Y = v => H - M.b - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (H - M.t - M.b);
+    
+    let g = '', step = isT ? 1 : 10;
+    for (let v = lo; v <= hi + 1e-9; v += step) g += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
+    
+    const b1 = isT ? ioTData.sp - CFG.warn : CFG.hum.lo, b2 = isT ? ioTData.sp + CFG.warn : CFG.hum.hi;
+    g += `<rect x="${M.l}" width="${W - M.l - M.r}" y="${Y(b2)}" height="${Math.max(0, Y(b1) - Y(b2))}" fill="var(--ok)" opacity=".13"/>`;
+    if (isT && ioTData.sp !== null) g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(ioTData.sp)}" y2="${Y(ioTData.sp)}" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="5 4"/><text class="ax" x="${W - M.r - 4}" y="${Y(ioTData.sp) - 5}" text-anchor="end" style="fill:var(--ok)">setpoint ${nf(ioTData.sp)}</text>`;
+    
+    if (st.range === 'today') {
+        for (let h = 0; h <= 24; h += compact ? 6 : 3) {
+            const t = s + h * 36e5;
+            g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="${h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}">${pad(h % 24)}:00</text>`;
+        }
+    } else {
+        for (let t = mid + (mid < s ? 864e5 : 0); t <= e; t += 864e5) {
+            if (t < s || X(t) < M.l + 18) continue;
+            g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="middle">${new Date(t).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' })}</text>`;
+        }
+    }
+    
+    let line = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('');
+    const last = pts[pts.length - 1];
+    g += `<path d="${line} L${X(last[0])} ${H - M.b} L${X(pts[0][0])} ${H - M.b}Z" fill="var(--c)" opacity=".1"/><path d="${line}" fill="none" stroke="var(--c)" stroke-width="2" stroke-linejoin="round"/>`;
+    g += `<circle cx="${X(last[0])}" cy="${Y(last[1])}" r="4.5" fill="var(--c)" stroke="var(--surface)" stroke-width="2"/>`;
+    g += `<line id="hl" y1="${M.t}" y2="${H - M.b}" stroke="var(--ink)" stroke-width="1" opacity="0"/><circle id="hd" r="5" fill="var(--c)" stroke="var(--surface)" stroke-width="2" opacity="0"/><rect id="hit" x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}" fill="transparent"/>`;
+    
+    const tip = $('#tip');
+    plot.querySelector('svg')?.remove();
+    plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})" role="img" aria-label="Grafik ${isT ? 'suhu' : 'kelembaban'}">${g}</svg>`);
+    
+    const svg = plot.querySelector('svg'), hit = svg.querySelector('#hit'), hl = svg.querySelector('#hl'), hd = svg.querySelector('#hd');
+    const out = () => { hl.setAttribute('opacity', 0); hd.setAttribute('opacity', 0); tip.style.display = 'none'; };
+    
+    hit.addEventListener('pointermove', ev => {
+        const r = svg.getBoundingClientRect(), k = W / r.width, px = (ev.clientX - r.left) * k, tt = s + (px - M.l) / (W - M.l - M.r) * (e - s);
+        let i = 0; while (i < pts.length - 1 && pts[i][0] < tt) i++;
+        if (i < 0 || i >= pts.length) return out();
+        
+        const [pt, pv] = pts[i], x = X(pt), y = Y(pv);
+        hl.setAttribute('x1', x); hl.setAttribute('x2', x); hl.setAttribute('opacity', .35);
+        hd.setAttribute('cx', x); hd.setAttribute('cy', y); hd.setAttribute('opacity', 1);
+        
+        const dd = new Date(pt);
+        tip.innerHTML = `<b>${nf(pv, dec)}${u}</b>${dd.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}, ${pad(dd.getHours())}:${pad(dd.getMinutes())}`;
+        tip.style.display = 'block'; const pr = plot.getBoundingClientRect();
+        tip.style.left = Math.max(60, Math.min(pr.width - 60, x / k)) + 'px';
+        tip.style.top = (y / k - 10) + 'px';
+    });
+    hit.addEventListener('pointerleave', out);
+    
+    const vs = pts.map(p => p[1]);
+    $('#sMin').textContent = nf(Math.min(...vs), dec) + u;
+    $('#sMax').textContent = nf(Math.max(...vs), dec) + u;
+    $('#sAvg').textContent = nf(vs.reduce((a, b) => a + b, 0) / vs.length, dec) + u;
+}
+
+function seg(id, key, cb) {
+    const el = $(id);
+    el.addEventListener('click', ev => {
+        const b = ev.target.closest('button');
+        if (!b || b.disabled) return;
+        el.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
+        st[key] = b.dataset.v;
+        cb();
+    });
+}
+seg('#segMetric', 'metric', drawChart);
+seg('#segRange', 'range', drawChart);
+let lastCW = 0;
+new ResizeObserver(es => { const w = Math.round(es[0].contentRect.width); if (w !== lastCW) { lastCW = w; drawChart(); } }).observe($('#plot'));
+
+/* =========================================================
+   INTERAKSI ADEGAN AYAM (ANIMASI & SUARA)
+   ========================================================= */
+let tapMsg = '', tapUntil = 0, taps = 0;
+const NS = 'http://www.w3.org/2000/svg', snd = { on: false, ctx: null };
+function beep(f1, f2, d = .09) {
+    if (!snd.on) return;
+    try {
+        snd.ctx = snd.ctx || new (window.AudioContext || window.webkitAudioContext)();
+        const c = snd.ctx, o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
+        o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + d);
+        g.gain.setValueAtTime(.12, t); g.gain.exponentialRampToValueAtTime(.001, t + d + .02);
+        o.connect(g); g.connect(c.destination); o.start(); o.stop(t + d + .03);
+    } catch (e) { }
+}
+const once = (el, cls, ms) => { el.classList.remove(cls); void el.getBoundingClientRect(); el.classList.add(cls); setTimeout(() => el.classList.remove(cls), ms); };
+const svgPt = ev => { const r = scene.getBoundingClientRect(); return [(ev.clientX - r.left) * 600 / r.width, (ev.clientY - r.top) * 340 / r.height]; };
+const pick = a => a[Math.floor(Math.random() * a.length)];
+function say2(a, ms) { tapMsg = pick(a); tapUntil = Date.now() + ms; setSay(tapMsg); }
+function heart(x, y) {
+    const g = document.createElementNS(NS, 'g'), p = document.createElementNS(NS, 'path');
+    g.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+    p.setAttribute('class', 'heart'); p.setAttribute('d', 'M0 -4 C-6 -12 -16 -4 0 9 C16 -4 6 -12 0 -4Z');
+    g.appendChild(p); $('#fxLayer').appendChild(g); setTimeout(() => g.remove(), 1500);
+}
+
+scene.addEventListener('click', ev => {
+    const [x, y] = svgPt(ev), egg = ev.target.closest('.egg'), hen = ev.target.closest('.pet');
+    if (egg) { once(egg, 'wob', 700); beep(700, 520); heart(x, y - 12); say2(['Ada yang bergerak!', 'Tok tok… sabar ya.', 'Telurnya sehat kok.'], 2400); return; }
+    if (!hen) return;
+    const m = scene.dataset.mood, n = scene.dataset.phase === 'malam';
+    taps++; $('#hint').textContent = `Dielus ${taps}×`;
+    once(scene, 'jump', 750); once(scene, 'flap', 900); beep(520, 780);
+    for (let i = 0; i < 3; i++) setTimeout(() => heart(x + (Math.random() - .5) * 60, y - 14), i * 130);
+    
+    if (!ioTData.hasData) { say2(['Masih nunggu sinyal...', 'ESP-nya belum nyambung.'], 2600); return; }
+
+    if (m === 'normal') { scene.dataset.happy = 'true'; setTimeout(() => scene.dataset.happy = 'false', 1500); }
+    say2(m === 'cold' ? ['Brrr… peluk dong!', 'Dingin… hangatkan aku!'] : m === 'hot' ? ['Panas… kipasin dong!', 'Huft… gerah banget!'] : n ? ['Zzz… eh, ada apa?', 'Ngantuk… pok pok.'] : ['Hehe, geli ih~', 'Pok pok! Makasih!', 'Aku lagi mengerami~', 'Telurnya aman kok!'], 2600);
+});
+
+$('#btnSnd').addEventListener('click', () => { snd.on = !snd.on; $('#btnSnd').textContent = 'Suara: ' + (snd.on ? 'nyala' : 'mati'); beep(600, 800); });
+const pups = $('#pups'), stage = document.querySelector('.stage');
+stage.addEventListener('pointermove', ev => {
+    const [x, y] = svgPt(ev), dx = x - 300, dy = y - 140, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 160);
+    pups.style.transform = `translate(${(dx / d * 3.2 * k).toFixed(2)}px,${(dy / d * 2.6 * k).toFixed(2)}px)`;
+});
+stage.addEventListener('pointerleave', () => { pups.style.transform = 'translate(0,0)'; });
+setInterval(() => { if (scene.dataset.mood !== 'normal' || scene.dataset.eyes !== 'open' || scene.dataset.happy === 'true') return; once(scene, Math.random() < .5 ? 'tilt' : 'peck', 1300); }, 6500);
+
+/* =========================================================
+   INISIALISASI & LOOP SISTEM
+   ========================================================= */
+modeUI();
+updateUI();
+drawChart();
+setInterval(updateUI, 1000); // Sinkronisasi jam dan UI animasi
+setInterval(fetchServerData, FETCH_INTERVAL_MS); // Rutin ambil data dari ESP
+fetchServerData(); // Panggil saat pertama kali load
+</script>
+
+</body>
+</html>
