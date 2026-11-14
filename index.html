@@ -456,14 +456,14 @@ input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%
         <p class="hint" id="modeNote">Koneksi sedang dibuat. Menunggu respon dari server.</p>
       </div>
     </section>
-    
+
     <section class="card" aria-label="Aktuator">
       <h2>Aktuator ESP</h2>
       <div class="act"><div><b>Lampu pemanas</b><span class="s">Daya ditentukan oleh PID Controller</span></div><span class="av" id="aLampV">--%</span></div>
       <div class="act"><div><b>Kipas angin</b><span class="s" id="aFanS">Menunggu data server</span></div><button class="sw" id="swFan" type="button" role="switch" aria-label="Kipas angin" aria-checked="false" disabled><i></i></button></div>
       <div class="act"><div><b>Motor pembalik telur</b><span class="s" id="aMotS">Menunggu data server</span></div><button class="sw" id="swMot" type="button" role="switch" aria-label="Motor pembalik telur" aria-checked="false" disabled><i></i></button></div>
     </section>
-    
+
     <section class="card pid" aria-label="Parameter kendali">
       <h2>Parameter kendali PID</h2>
       <div class="pid-row"><b>Kp</b><span>Proporsional</span><em id="kp">--</em></div>
@@ -492,93 +492,131 @@ input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%
 /* =========================================================
    PENGATURAN KONEKSI DATABASE (GOOGLE SHEETS / ESP)
    ========================================================= */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRnu9I8L-5AC89ttYriW6opfhoRmGDdEanvNb5Mpp6z0T3wqkcSP1F8XmnYhrS0wAjlw/exec"; 
-const FETCH_INTERVAL_MS = 5000; // Frekuensi penarikan data dari server (5 detik)
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxRnu9I8L-5AC89ttYriW6opfhoRmGDdEanvNb5Mpp6z0T3wqkcSP1F8XmnYhrS0wAjlw/exec";
+const FETCH_INTERVAL_MS = 4000;  // Frekuensi penarikan data dari server (4 detik)
+const COMMAND_HOLD_MS   = 6500;  // Jeda proteksi agar polling tidak menimpa tombol saat menulis ke Sheets
 const CFG = { warn: 0.5, crit: 1.0, hum: { lo: 55, hi: 65 } };
 
-// State Data Kosong dari awal (Loading State)
 const ioTData = {
   hasData: false,
-  t: null, h: null, sp: null,
+  t: null, h: null, sp: 37.5,
   kp: null, ki: null, kd: null,
   duty: 0, fan: false, motor: false, mode: 'auto'
 };
 
-// Data riwayat benar-benar kosong
-let historyData = []; 
+let historyData = [];
+let historyLoadedFromServer = false;
+let lastCommandTime = 0;
 
 /* =========================================================
    UTILITAS & THEME TOGGLE
    ========================================================= */
 const $ = s => document.querySelector(s), pad = n => String(n).padStart(2, '0');
 const nf = (v, d = 1) => v !== null && !isNaN(v) ? Number(v).toLocaleString('id-ID', { minimumFractionDigits: d, maximumFractionDigits: d }) : '--';
+const parseBool = v => v === true || v === 1 || String(v).trim().toLowerCase() === 'true';
 const st = { range: 'today', metric: 'temp' };
 
-// Mengatur tema Terang/Gelap
 let currentTheme = localStorage.getItem('sh_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    $('#themeIcon').textContent = theme === 'dark' ? '🌙' : '☀️';
+  document.documentElement.setAttribute('data-theme', theme);
+  $('#themeIcon').textContent = theme === 'dark' ? '🌙' : '☀️';
 }
 $('#btnTheme').addEventListener('click', () => {
-    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('sh_theme', currentTheme);
-    applyTheme(currentTheme);
+  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('sh_theme', currentTheme);
+  applyTheme(currentTheme);
 });
 applyTheme(currentTheme);
 
 /* =========================================================
-   FUNGSI JARINGAN (Ambil & Kirim Perintah)
+   FUNGSI JARINGAN (Ambil & Kirim Perintah Tanpa Blokir CORS)
    ========================================================= */
 let lastHistorySave = 0;
 
 async function fetchServerData() {
-    if (!GOOGLE_SCRIPT_URL) return;
-    try {
-        const res = await fetch(GOOGLE_SCRIPT_URL + "?action=read");
-        if (!res.ok) return;
-        const data = await res.json();
-        
-        // Memastikan data tidak kosong
-        if (data && data.temp !== undefined && data.temp !== "") {
-            ioTData.hasData = true;
-            ioTData.t = parseFloat(data.temp) || ioTData.t;
-            ioTData.h = parseFloat(data.hum) || ioTData.h;
-            ioTData.sp = parseFloat(data.sp) || ioTData.sp;
-            ioTData.duty = parseFloat(data.duty) || ioTData.duty;
-            ioTData.kp = parseFloat(data.kp) || ioTData.kp;
-            ioTData.ki = parseFloat(data.ki) || ioTData.ki;
-            ioTData.kd = parseFloat(data.kd) || ioTData.kd;
-            ioTData.fan = !!data.fan;
-            ioTData.motor = !!data.motor;
-            ioTData.mode = data.mode || ioTData.mode;
-            
-            // Simpan riwayat pembacaan lokal (maks 1 per menit untuk chart harian)
-            const n = Date.now();
-            if (n - lastHistorySave >= 60000) {
-                historyData.push([n, ioTData.t, ioTData.h]);
-                if (historyData.length > 2000) historyData.shift(); 
-                lastHistorySave = n;
-                drawChart();
-            }
-            updateUI();
+  if (!GOOGLE_SCRIPT_URL) return;
+  const reqStartedAt = Date.now();
+  try {
+    const res = await fetch(GOOGLE_SCRIPT_URL + "?action=read&t=" + reqStartedAt);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data && data.temp !== undefined && data.temp !== "") {
+      ioTData.hasData = true;
+
+      const tNum = parseFloat(data.temp);
+      const hNum = parseFloat(data.hum);
+      const dutyNum = parseFloat(data.duty);
+      const kpNum = parseFloat(data.kp);
+      const kiNum = parseFloat(data.ki);
+      const kdNum = parseFloat(data.kd);
+
+      if (Number.isFinite(tNum)) ioTData.t = tNum;
+      if (Number.isFinite(hNum)) ioTData.h = hNum;
+      if (Number.isFinite(dutyNum)) ioTData.duty = dutyNum;
+      if (Number.isFinite(kpNum)) ioTData.kp = kpNum;
+      if (Number.isFinite(kiNum)) ioTData.ki = kiNum;
+      if (Number.isFinite(kdNum)) ioTData.kd = kdNum;
+
+      // Hanya perbarui kontrol (mode, sp, fan, motor) jika tidak sedang ada perintah baru dalam 6,5 detik terakhir
+      const inCommandCooldown = (Date.now() - lastCommandTime < COMMAND_HOLD_MS) || (lastCommandTime > reqStartedAt);
+      if (!inCommandCooldown) {
+        const spNum = parseFloat(data.sp);
+        if (Number.isFinite(spNum)) ioTData.sp = spNum;
+        ioTData.fan = parseBool(data.fan);
+        ioTData.motor = parseBool(data.motor);
+        if (data.mode) {
+          ioTData.mode = String(data.mode).trim().toLowerCase() === 'manual' ? 'manual' : 'auto';
         }
-    } catch (e) {
-        console.error("Gagal mengambil data dari Google Sheets:", e);
+      }
+
+      // Muat riwayat awal dari sheet Riwayat saat pertama kali buka halaman
+      if (!historyLoadedFromServer && Array.isArray(data.history) && data.history.length > 0) {
+        historyData = data.history;
+        historyLoadedFromServer = true;
+        lastHistorySave = historyData[historyData.length - 1][0];
+        drawChart();
+      }
+
+      // Simpan riwayat pembacaan baru tiap 1 menit
+      const n = Date.now();
+      if (n - lastHistorySave >= 60000 && Number.isFinite(ioTData.t) && Number.isFinite(ioTData.h)) {
+        historyData.push([n, ioTData.t, ioTData.h]);
+        if (historyData.length > 2000) historyData.shift();
+        lastHistorySave = n;
+        drawChart();
+      }
+      updateUI();
     }
+  } catch (e) {
+    console.error("Gagal mengambil data dari Google Sheets:", e);
+  }
 }
 
 async function sendCommand(key, value) {
-    if (!GOOGLE_SCRIPT_URL) return;
-    try {
-        await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            body: JSON.stringify({ action: "command", key: key, value: value }),
-            headers: { 'Content-Type': 'application/json' }
-        });
-    } catch (e) {
-        console.error("Gagal mengirim perintah:", e);
+  if (!GOOGLE_SCRIPT_URL) return;
+  lastCommandTime = Date.now();
+  try {
+    // PENTING: Gunakan text/plain agar browser mengirim POST langsung tanpa blokir CORS OPTIONS preflight
+    const res = await fetch(GOOGLE_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: "command", key: key, value: value })
+    });
+    lastCommandTime = Date.now();
+    if (res.ok) {
+      const reply = await res.json();
+      if (reply && reply.status === "success") {
+        if (reply.mode) ioTData.mode = reply.mode === 'manual' ? 'manual' : 'auto';
+        if (Number.isFinite(Number(reply.sp))) ioTData.sp = Number(reply.sp);
+        if (reply.fan !== undefined) ioTData.fan = parseBool(reply.fan);
+        if (reply.motor !== undefined) ioTData.motor = parseBool(reply.motor);
+        updateUI();
+      }
     }
+  } catch (e) {
+    console.error("Gagal mengirim perintah:", e);
+  }
 }
 
 /* =========================================================
@@ -591,153 +629,158 @@ function setSay(t) { $('#say').textContent = t; $('#sayM').textContent = t; }
 const phaseOf = h => h >= 5 && h < 10 ? 'pagi' : h >= 10 && h < 15 ? 'siang' : h >= 15 && h < 18 ? 'sore' : 'malam';
 
 function celestial(h) {
-    const day = h >= 5.5 && h < 18.5, p = day ? (h - 5.5) / 13 : ((h >= 18.5 ? h - 18.5 : h + 5.5) / 11);
-    const x = 50 + p * 500, y = 228 - Math.sin(Math.PI * p) * 165, tr = `translate(${x}px,${y}px)`;
-    $('#sun').style.transform = tr; $('#sun').style.opacity = day ? 1 : 0;
-    $('#moon').style.transform = tr; $('#moon').style.opacity = day ? 0 : 1;
+  const day = h >= 5.5 && h < 18.5, p = day ? (h - 5.5) / 13 : ((h >= 18.5 ? h - 18.5 : h + 5.5) / 11);
+  const x = 50 + p * 500, y = 228 - Math.sin(Math.PI * p) * 165, tr = `translate(${x}px,${y}px)`;
+  $('#sun').style.transform = tr; $('#sun').style.opacity = day ? 1 : 0;
+  $('#moon').style.transform = tr; $('#moon').style.opacity = day ? 0 : 1;
 }
 
 function updateUI() {
-    const d = new Date(), real = d.getHours() + d.getMinutes() / 60;
-    $('#clk').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    $('#dt').textContent = d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    const ph = phaseOf(real);
-    $('#phaseChip').textContent = PH_N[ph];
-    scene.dataset.phase = ph;
-    celestial(real);
+  const d = new Date(), real = d.getHours() + d.getMinutes() / 60;
+  $('#clk').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  $('#dt').textContent = d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const ph = phaseOf(real);
+  $('#phaseChip').textContent = PH_N[ph];
+  scene.dataset.phase = ph;
+  celestial(real);
 
-    // KONDISI LOADING: Saat belum ada data
-    if (!ioTData.hasData) {
-        setSay("Menunggu sambungan ESP...");
-        $('#pill').dataset.s = "warn";
-        $('#pillT').textContent = "Menunggu data";
-        scene.dataset.mood = 'normal';
-        scene.dataset.eyes = 'open';
-        return; 
-    }
+  if (!ioTData.hasData) {
+    setSay("Menunggu sambungan ESP...");
+    $('#pill').dataset.s = "warn";
+    $('#pillT').textContent = "Menunggu data";
+    scene.dataset.mood = 'normal';
+    scene.dataset.eyes = 'open';
+    return;
+  }
 
-    // KONDISI NORMAL: Setelah data diterima
-    const t = ioTData.t, hu = ioTData.h, sp = ioTData.sp;
-    $('#sp').textContent = nf(sp) + ' °C';
-    $('#gTa').textContent = nf(sp - 3); $('#gTb').textContent = nf(sp + 3);
-    $('#kp').textContent = nf(ioTData.kp); $('#ki').textContent = nf(ioTData.ki, 2); $('#kd').textContent = nf(ioTData.kd);
+  const t = ioTData.t, hu = ioTData.h, sp = ioTData.sp;
+  $('#sp').textContent = nf(sp) + ' °C';
+  $('#gTa').textContent = nf(sp - 3); $('#gTb').textContent = nf(sp + 3);
+  $('#kp').textContent = nf(ioTData.kp); $('#ki').textContent = nf(ioTData.ki, 2); $('#kd').textContent = nf(ioTData.kd);
 
-    const dl = t - sp, ad = Math.abs(dl);
-    const mood = dl < -CFG.crit ? 'cold' : dl > CFG.crit ? 'hot' : 'normal';
-    scene.dataset.mood = mood;
-    scene.dataset.eyes = mood === 'cold' ? 'closed' : mood === 'hot' ? 'droopy' : ph === 'malam' ? 'closed' : 'open';
-    scene.dataset.sleep = String(mood === 'normal' && ph === 'malam' && ad <= CFG.warn);
+  const dl = t - sp, ad = Math.abs(dl);
+  const mood = dl < -CFG.crit ? 'cold' : dl > CFG.crit ? 'hot' : 'normal';
+  scene.dataset.mood = mood;
+  scene.dataset.eyes = mood === 'cold' ? 'closed' : mood === 'hot' ? 'droopy' : ph === 'malam' ? 'closed' : 'open';
+  scene.dataset.sleep = String(mood === 'normal' && ph === 'malam' && ad <= CFG.warn);
 
-    let say, ps, pt;
-    if (mood === 'cold') { say = 'Brrr… dingin banget!'; ps = 'cold'; pt = 'Terlalu dingin'; }
-    else if (mood === 'hot') { say = 'Haduh, panas banget!'; ps = 'hot'; pt = 'Terlalu panas'; }
-    else if (ad > CFG.warn) { say = dl < 0 ? 'Agak dingin nih…' : 'Mulai gerah nih…'; ps = 'warn'; pt = dl < 0 ? 'Agak dingin' : 'Agak panas'; }
-    else { say = { pagi: 'Pagi! Telurnya hangat.', siang: 'Hangat dan nyaman.', sore: 'Sore tenang, suhu aman.', malam: 'Zzz… suhu aman.' }[ph]; ps = 'ok'; pt = 'Stabil'; }
+  let say, ps, pt;
+  if (mood === 'cold') { say = 'Brrr… dingin banget!'; ps = 'cold'; pt = 'Terlalu dingin'; }
+  else if (mood === 'hot') { say = 'Haduh, panas banget!'; ps = 'hot'; pt = 'Terlalu panas'; }
+  else if (ad > CFG.warn) { say = dl < 0 ? 'Agak dingin nih…' : 'Mulai gerah nih…'; ps = 'warn'; pt = dl < 0 ? 'Agak dingin' : 'Agak panas'; }
+  else { say = { pagi: 'Pagi! Telurnya hangat.', siang: 'Hangat dan nyaman.', sore: 'Sore tenang, suhu aman.', malam: 'Zzz… suhu aman.' }[ph]; ps = 'ok'; pt = 'Stabil'; }
 
-    if (Date.now() < tapUntil) say = tapMsg;
-    setSay(say);
-    $('#pill').dataset.s = ps; $('#pillT').textContent = pt;
-    $('#vt').textContent = nf(t); $('#vh').textContent = nf(hu, 0);
-    $('#dT').textContent = `${dl >= 0 ? '+' : '−'}${nf(ad, 1)} °C dari setpoint ${nf(sp)} °C`;
+  if (Date.now() < tapUntil) say = tapMsg;
+  setSay(say);
+  $('#pill').dataset.s = ps; $('#pillT').textContent = pt;
+  $('#vt').textContent = nf(t); $('#vh').textContent = nf(hu, 0);
+  $('#dT').textContent = `${dl >= 0 ? '+' : '−'}${nf(ad, 1)} °C dari setpoint ${nf(sp)} °C`;
 
-    const hs = hu < CFG.hum.lo ? 'di bawah target' : hu > CFG.hum.hi ? 'di atas target' : 'dalam target';
-    $('#dH').textContent = `Target ${CFG.hum.lo}–${CFG.hum.hi} %RH · ${hs}`;
+  const hs = hu < CFG.hum.lo ? 'di bawah target' : hu > CFG.hum.hi ? 'di atas target' : 'dalam target';
+  $('#dH').textContent = `Target ${CFG.hum.lo}–${CFG.hum.hi} %RH · ${hs}`;
 
-    gauge('#gT', t, sp - 3, sp + 3, sp - CFG.warn, sp + CFG.warn);
-    gauge('#gH', hu, 40, 80, CFG.hum.lo, CFG.hum.hi);
+  gauge('#gT', t, sp - 3, sp + 3, sp - CFG.warn, sp + CFG.warn);
+  gauge('#gH', hu, 40, 80, CFG.hum.lo, CFG.hum.hi);
 
-    $('#duty').textContent = nf(ioTData.duty, 0) + '%';
-    $('#dutyBar').style.width = ioTData.duty + '%';
-    
-    actuateUI(ioTData.duty, ioTData.fan, ioTData.motor);
-    modeUI();
+  $('#duty').textContent = nf(ioTData.duty, 0) + '%';
+  $('#dutyBar').style.width = ioTData.duty + '%';
+
+  actuateUI(ioTData.duty, ioTData.fan, ioTData.motor);
+  modeUI();
 }
 
 function gauge(id, v, lo, hi, b1, b2) {
-    const g = $(id); if(!g || v === null) return;
-    const P = x => Math.max(0, Math.min(100, (x - lo) / (hi - lo) * 100));
-    const b = g.querySelector('.band');
-    b.style.left = P(b1) + '%'; b.style.width = (P(b2) - P(b1)) + '%';
-    g.querySelector('.mk').style.left = P(v) + '%';
+  const g = $(id); if (!g || v === null) return;
+  const P = x => Math.max(0, Math.min(100, (x - lo) / (hi - lo) * 100));
+  const b = g.querySelector('.band');
+  b.style.left = P(b1) + '%'; b.style.width = (P(b2) - P(b1)) + '%';
+  g.querySelector('.mk').style.left = P(v) + '%';
 }
 
 function setSw(id, on, dis) {
-    const b = $(id);
-    b.setAttribute('aria-checked', String(on));
-    b.disabled = dis;
+  const b = $(id);
+  b.setAttribute('aria-checked', String(on));
+  b.disabled = dis;
 }
 
 function actuateUI(duty, fan, motor) {
-    const a = ioTData.mode === 'auto';
-    scene.dataset.fan = fan ? 'on' : 'off';
-    scene.dataset.motor = motor ? 'on' : 'off';
-    scene.style.setProperty('--lamp', (duty / 100).toFixed(2));
-    
-    $('#capLamp').textContent = 'Lampu ' + nf(duty, 0) + '%';
-    $('#capFan').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF');
-    $('#capMot').textContent = 'Motor ' + (motor ? 'ON' : 'OFF');
-    $('#aLampV').textContent = nf(duty, 0) + '%';
-    $('#dLampT').textContent = 'Lampu ' + nf(duty, 0) + '%'; $('#dLamp').dataset.on = String(duty > 0);
-    $('#dFanT').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF'); $('#dFan').dataset.on = String(!!fan);
-    $('#dMotT').textContent = 'Motor ' + (motor ? 'ON' : 'OFF'); $('#dMot').dataset.on = String(!!motor);
-    
-    setSw('#swFan', fan, a);
-    setSw('#swMot', motor, a);
-    $('#aFanS').textContent = a ? 'Diatur otomatis oleh ESP' : 'Manual · ' + (fan ? 'menyala' : 'mati');
-    $('#aMotS').textContent = a ? 'Diatur otomatis oleh ESP' : 'Manual · ' + (motor ? 'berputar' : 'mati');
+  const a = ioTData.mode === 'auto';
+  scene.dataset.fan = fan ? 'on' : 'off';
+  scene.dataset.motor = motor ? 'on' : 'off';
+  scene.style.setProperty('--lamp', (duty / 100).toFixed(2));
+
+  $('#capLamp').textContent = 'Lampu ' + nf(duty, 0) + '%';
+  $('#capFan').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF');
+  $('#capMot').textContent = 'Motor ' + (motor ? 'ON' : 'OFF');
+  $('#aLampV').textContent = nf(duty, 0) + '%';
+  $('#dLampT').textContent = 'Lampu ' + nf(duty, 0) + '%'; $('#dLamp').dataset.on = String(duty > 0);
+  $('#dFanT').textContent = 'Kipas ' + (fan ? 'ON' : 'OFF'); $('#dFan').dataset.on = String(!!fan);
+  $('#dMotT').textContent = 'Motor ' + (motor ? 'ON' : 'OFF'); $('#dMot').dataset.on = String(!!motor);
+
+  setSw('#swFan', fan, a);
+  setSw('#swMot', motor, a);
+  $('#aFanS').textContent = a ? 'Otomatis ESP · ' + (fan ? 'menyala' : 'mati') : 'Manual · ' + (fan ? 'menyala' : 'mati');
+  $('#aMotS').textContent = a ? 'Otomatis ESP · ' + (motor ? 'berputar' : 'mati') : 'Manual · ' + (motor ? 'berputar' : 'mati');
 }
 
 /* Mode Control Update */
 function modeUI() {
-    const a = ioTData.mode === 'auto', n = $('#modeNote'), sp = ioTData.sp;
-    
-    // Aktifkan tombol segmen jika ada data
-    document.querySelectorAll('#segMode button').forEach(b => {
-        b.disabled = !ioTData.hasData;
-        if(ioTData.hasData) {
-            b.setAttribute('aria-pressed', b.dataset.v === ioTData.mode);
-        }
-    });
+  const a = ioTData.mode === 'auto', n = $('#modeNote'), sp = ioTData.sp;
 
-    if(!ioTData.hasData) return;
+  document.querySelectorAll('#segMode button').forEach(b => {
+    b.disabled = !ioTData.hasData;
+    if (ioTData.hasData) {
+      b.setAttribute('aria-pressed', String(b.dataset.v === ioTData.mode));
+    }
+  });
 
-    $('#spR').disabled = a;
-    $('#spV').textContent = nf(sp) + ' °C';
+  if (!ioTData.hasData) return;
+
+  $('#spR').disabled = a;
+  $('#spV').textContent = nf(sp) + ' °C';
+  if (document.activeElement !== $('#spR')) {
     $('#spR').value = sp !== null ? sp : 37.5;
-    fillR();
-    
-    n.className = 'hint';
-    if(a) n.textContent = 'Setpoint diatur otomatis berdasarkan pengaturan pada program ESP.';
-    else if(sp < 37 || sp > 38) { n.textContent = 'Di luar kisaran aman penetasan ayam (37,0–38,0 °C). Daya tetas bisa turun.'; n.classList.add('warn'); }
-    else n.textContent = 'Mode manual. Geser untuk mengatur target suhu baru ke ESP.';
+  }
+  fillR();
+
+  n.className = 'hint';
+  if (a) n.textContent = 'Mode otomatis. Setpoint, kipas, dan motor dikendalikan penuh oleh ESP32.';
+  else if (sp < 37 || sp > 38) { n.textContent = 'Di luar kisaran aman penetasan ayam (37,0–38,0 °C). Daya tetas bisa turun.'; n.classList.add('warn'); }
+  else n.textContent = 'Mode manual aktif. Anda dapat mengatur setpoint, kipas, dan motor.';
 }
 
 $('#segMode').addEventListener('click', ev => {
-    if(!ioTData.hasData) return;
-    const b = ev.target.closest('button');
-    if (!b || b.dataset.v === ioTData.mode) return;
-    ioTData.mode = b.dataset.v;
-    sendCommand('mode', ioTData.mode);
-    modeUI(); updateUI();
+  if (!ioTData.hasData) return;
+  const b = ev.target.closest('button');
+  if (!b || b.dataset.v === ioTData.mode) return;
+  ioTData.mode = b.dataset.v;
+  if (ioTData.mode === 'auto') {
+    ioTData.sp = 37.5;
+  }
+  sendCommand('mode', ioTData.mode);
+  modeUI(); updateUI();
 });
-$('#spR').addEventListener('input', fillR);
+$('#spR').addEventListener('input', ev => {
+  $('#spV').textContent = nf(parseFloat(ev.target.value)) + ' °C';
+  fillR();
+});
 $('#spR').addEventListener('change', ev => {
-    if(!ioTData.hasData) return;
-    ioTData.sp = parseFloat(ev.target.value);
-    sendCommand('sp', ioTData.sp);
-    modeUI(); updateUI();
+  if (!ioTData.hasData || ioTData.mode !== 'manual') return;
+  ioTData.sp = parseFloat(ev.target.value);
+  sendCommand('sp', ioTData.sp);
+  modeUI(); updateUI();
 });
 $('#swFan').addEventListener('click', () => {
-    if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
-    ioTData.fan = !ioTData.fan;
-    sendCommand('fan', ioTData.fan);
-    updateUI();
+  if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
+  ioTData.fan = !ioTData.fan;
+  sendCommand('fan', ioTData.fan);
+  updateUI();
 });
 $('#swMot').addEventListener('click', () => {
-    if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
-    ioTData.motor = !ioTData.motor;
-    sendCommand('motor', ioTData.motor);
-    updateUI();
+  if (ioTData.mode !== 'manual' || !ioTData.hasData) return;
+  ioTData.motor = !ioTData.motor;
+  sendCommand('motor', ioTData.motor);
+  updateUI();
 });
 
 /* =========================================================
@@ -746,103 +789,102 @@ $('#swMot').addEventListener('click', () => {
 let W = 800, H = 300, compact = false;
 const M = { l: 46, r: 16, t: 14, b: 30 };
 function drawChart() {
-    const plot = $('#plot');
-    const cw = Math.round(plot.clientWidth);
-    if (cw > 0) { W = cw; H = W < 520 ? 230 : W < 900 ? 280 : 320; }
-    compact = W < 520;
-    const isT = st.metric === 'temp';
-    const lo = isT ? 34 : 40, hi = isT ? 41 : 80, u = isT ? ' °C' : ' %RH', dec = isT ? 2 : 1;
+  const plot = $('#plot');
+  const cw = Math.round(plot.clientWidth);
+  if (cw > 0) { W = cw; H = W < 520 ? 230 : W < 900 ? 280 : 320; }
+  compact = W < 520;
+  const isT = st.metric === 'temp';
+  const lo = isT ? 34 : 40, hi = isT ? 41 : 80, u = isT ? ' °C' : ' %RH', dec = isT ? 2 : 1;
 
-    // Jika data kosong, gambar frame dasar (garis kisi) tanpa garis grafik (Mencegah tampilan aneh)
-    if (historyData.length === 0) {
-        let emptyGrid = '';
-        let step = isT ? 1 : 10;
-        const Y = v => H - M.b - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (H - M.t - M.b);
-        for (let v = lo; v <= hi + 1e-9; v += step) {
-            emptyGrid += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
-        }
-        emptyGrid += `<text class="ax" x="${W/2}" y="${H/2}" text-anchor="middle" font-size="14">Belum ada data sensor</text>`;
-        plot.querySelector('svg')?.remove();
-        plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})">${emptyGrid}</svg>`);
-        $('#sMin').textContent = '--'; $('#sMax').textContent = '--'; $('#sAvg').textContent = '--';
-        return;
-    }
-
-    const now = Date.now(), d = new Date(), mid = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    let s, e;
-    if (st.range === 'today') { s = mid; e = mid + 864e5; }
-    else { s = now - (st.range === 'd3' ? 3 : 7) * 864e5; e = now; }
-    
-    const filteredPts = historyData.filter(p => p[0] >= s && p[0] <= e);
-    const pts = filteredPts.length > 0 ? filteredPts.map(p => [p[0], isT ? p[1] : p[2]]) : [[now, isT ? ioTData.t : ioTData.h]];
-    
-    const X = t => M.l + (t - s) / (e - s) * (W - M.l - M.r);
+  if (historyData.length === 0) {
+    let emptyGrid = '';
+    let step = isT ? 1 : 10;
     const Y = v => H - M.b - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (H - M.t - M.b);
-    
-    let g = '', step = isT ? 1 : 10;
-    for (let v = lo; v <= hi + 1e-9; v += step) g += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
-    
-    const b1 = isT ? ioTData.sp - CFG.warn : CFG.hum.lo, b2 = isT ? ioTData.sp + CFG.warn : CFG.hum.hi;
-    g += `<rect x="${M.l}" width="${W - M.l - M.r}" y="${Y(b2)}" height="${Math.max(0, Y(b1) - Y(b2))}" fill="var(--ok)" opacity=".13"/>`;
-    if (isT && ioTData.sp !== null) g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(ioTData.sp)}" y2="${Y(ioTData.sp)}" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="5 4"/><text class="ax" x="${W - M.r - 4}" y="${Y(ioTData.sp) - 5}" text-anchor="end" style="fill:var(--ok)">setpoint ${nf(ioTData.sp)}</text>`;
-    
-    if (st.range === 'today') {
-        for (let h = 0; h <= 24; h += compact ? 6 : 3) {
-            const t = s + h * 36e5;
-            g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="${h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}">${pad(h % 24)}:00</text>`;
-        }
-    } else {
-        for (let t = mid + (mid < s ? 864e5 : 0); t <= e; t += 864e5) {
-            if (t < s || X(t) < M.l + 18) continue;
-            g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="middle">${new Date(t).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' })}</text>`;
-        }
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      emptyGrid += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
     }
-    
-    let line = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('');
-    const last = pts[pts.length - 1];
-    g += `<path d="${line} L${X(last[0])} ${H - M.b} L${X(pts[0][0])} ${H - M.b}Z" fill="var(--c)" opacity=".1"/><path d="${line}" fill="none" stroke="var(--c)" stroke-width="2" stroke-linejoin="round"/>`;
-    g += `<circle cx="${X(last[0])}" cy="${Y(last[1])}" r="4.5" fill="var(--c)" stroke="var(--surface)" stroke-width="2"/>`;
-    g += `<line id="hl" y1="${M.t}" y2="${H - M.b}" stroke="var(--ink)" stroke-width="1" opacity="0"/><circle id="hd" r="5" fill="var(--c)" stroke="var(--surface)" stroke-width="2" opacity="0"/><rect id="hit" x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}" fill="transparent"/>`;
-    
-    const tip = $('#tip');
+    emptyGrid += `<text class="ax" x="${W/2}" y="${H/2}" text-anchor="middle" font-size="14">Belum ada data sensor</text>`;
     plot.querySelector('svg')?.remove();
-    plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})" role="img" aria-label="Grafik ${isT ? 'suhu' : 'kelembaban'}">${g}</svg>`);
-    
-    const svg = plot.querySelector('svg'), hit = svg.querySelector('#hit'), hl = svg.querySelector('#hl'), hd = svg.querySelector('#hd');
-    const out = () => { hl.setAttribute('opacity', 0); hd.setAttribute('opacity', 0); tip.style.display = 'none'; };
-    
-    hit.addEventListener('pointermove', ev => {
-        const r = svg.getBoundingClientRect(), k = W / r.width, px = (ev.clientX - r.left) * k, tt = s + (px - M.l) / (W - M.l - M.r) * (e - s);
-        let i = 0; while (i < pts.length - 1 && pts[i][0] < tt) i++;
-        if (i < 0 || i >= pts.length) return out();
-        
-        const [pt, pv] = pts[i], x = X(pt), y = Y(pv);
-        hl.setAttribute('x1', x); hl.setAttribute('x2', x); hl.setAttribute('opacity', .35);
-        hd.setAttribute('cx', x); hd.setAttribute('cy', y); hd.setAttribute('opacity', 1);
-        
-        const dd = new Date(pt);
-        tip.innerHTML = `<b>${nf(pv, dec)}${u}</b>${dd.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}, ${pad(dd.getHours())}:${pad(dd.getMinutes())}`;
-        tip.style.display = 'block'; const pr = plot.getBoundingClientRect();
-        tip.style.left = Math.max(60, Math.min(pr.width - 60, x / k)) + 'px';
-        tip.style.top = (y / k - 10) + 'px';
-    });
-    hit.addEventListener('pointerleave', out);
-    
-    const vs = pts.map(p => p[1]);
-    $('#sMin').textContent = nf(Math.min(...vs), dec) + u;
-    $('#sMax').textContent = nf(Math.max(...vs), dec) + u;
-    $('#sAvg').textContent = nf(vs.reduce((a, b) => a + b, 0) / vs.length, dec) + u;
+    plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})">${emptyGrid}</svg>`);
+    $('#sMin').textContent = '--'; $('#sMax').textContent = '--'; $('#sAvg').textContent = '--';
+    return;
+  }
+
+  const now = Date.now(), d = new Date(), mid = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  let s, e;
+  if (st.range === 'today') { s = mid; e = mid + 864e5; }
+  else { s = now - (st.range === 'd3' ? 3 : 7) * 864e5; e = now; }
+
+  const filteredPts = historyData.filter(p => p[0] >= s && p[0] <= e);
+  const pts = filteredPts.length > 0 ? filteredPts.map(p => [p[0], isT ? p[1] : p[2]]) : [[now, isT ? ioTData.t : ioTData.h]];
+
+  const X = t => M.l + (t - s) / (e - s) * (W - M.l - M.r);
+  const Y = v => H - M.b - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (H - M.t - M.b);
+
+  let g = '', step = isT ? 1 : 10;
+  for (let v = lo; v <= hi + 1e-9; v += step) g += `<line class="gl" x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end">${isT ? nf(v, 1) : v}</text>`;
+
+  const b1 = isT ? ioTData.sp - CFG.warn : CFG.hum.lo, b2 = isT ? ioTData.sp + CFG.warn : CFG.hum.hi;
+  g += `<rect x="${M.l}" width="${W - M.l - M.r}" y="${Y(b2)}" height="${Math.max(0, Y(b1) - Y(b2))}" fill="var(--ok)" opacity=".13"/>`;
+  if (isT && ioTData.sp !== null) g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(ioTData.sp)}" y2="${Y(ioTData.sp)}" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="5 4"/><text class="ax" x="${W - M.r - 4}" y="${Y(ioTData.sp) - 5}" text-anchor="end" style="fill:var(--ok)">setpoint ${nf(ioTData.sp)}</text>`;
+
+  if (st.range === 'today') {
+    for (let h = 0; h <= 24; h += compact ? 6 : 3) {
+      const t = s + h * 36e5;
+      g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="${h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}">${pad(h % 24)}:00</text>`;
+    }
+  } else {
+    for (let t = mid + (mid < s ? 864e5 : 0); t <= e; t += 864e5) {
+      if (t < s || X(t) < M.l + 18) continue;
+      g += `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${H - M.b}" opacity=".5"/><text class="ax" x="${X(t)}" y="${H - 10}" text-anchor="middle">${new Date(t).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' })}</text>`;
+    }
+  }
+
+  let line = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('');
+  const last = pts[pts.length - 1];
+  g += `<path d="${line} L${X(last[0])} ${H - M.b} L${X(pts[0][0])} ${H - M.b}Z" fill="var(--c)" opacity=".1"/><path d="${line}" fill="none" stroke="var(--c)" stroke-width="2" stroke-linejoin="round"/>`;
+  g += `<circle cx="${X(last[0])}" cy="${Y(last[1])}" r="4.5" fill="var(--c)" stroke="var(--surface)" stroke-width="2"/>`;
+  g += `<line id="hl" y1="${M.t}" y2="${H - M.b}" stroke="var(--ink)" stroke-width="1" opacity="0"/><circle id="hd" r="5" fill="var(--c)" stroke="var(--surface)" stroke-width="2" opacity="0"/><rect id="hit" x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}" fill="transparent"/>`;
+
+  const tip = $('#tip');
+  plot.querySelector('svg')?.remove();
+  plot.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${H}" style="--c:var(${isT ? '--temp' : '--hum'})" role="img" aria-label="Grafik ${isT ? 'suhu' : 'kelembaban'}">${g}</svg>`);
+
+  const svg = plot.querySelector('svg'), hit = svg.querySelector('#hit'), hl = svg.querySelector('#hl'), hd = svg.querySelector('#hd');
+  const out = () => { hl.setAttribute('opacity', 0); hd.setAttribute('opacity', 0); tip.style.display = 'none'; };
+
+  hit.addEventListener('pointermove', ev => {
+    const r = svg.getBoundingClientRect(), k = W / r.width, px = (ev.clientX - r.left) * k, tt = s + (px - M.l) / (W - M.l - M.r) * (e - s);
+    let i = 0; while (i < pts.length - 1 && pts[i][0] < tt) i++;
+    if (i < 0 || i >= pts.length) return out();
+
+    const [pt, pv] = pts[i], x = X(pt), y = Y(pv);
+    hl.setAttribute('x1', x); hl.setAttribute('x2', x); hl.setAttribute('opacity', .35);
+    hd.setAttribute('cx', x); hd.setAttribute('cy', y); hd.setAttribute('opacity', 1);
+
+    const dd = new Date(pt);
+    tip.innerHTML = `<b>${nf(pv, dec)}${u}</b>${dd.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}, ${pad(dd.getHours())}:${pad(dd.getMinutes())}`;
+    tip.style.display = 'block'; const pr = plot.getBoundingClientRect();
+    tip.style.left = Math.max(60, Math.min(pr.width - 60, x / k)) + 'px';
+    tip.style.top = (y / k - 10) + 'px';
+  });
+  hit.addEventListener('pointerleave', out);
+
+  const vs = pts.map(p => p[1]);
+  $('#sMin').textContent = nf(Math.min(...vs), dec) + u;
+  $('#sMax').textContent = nf(Math.max(...vs), dec) + u;
+  $('#sAvg').textContent = nf(vs.reduce((a, b) => a + b, 0) / vs.length, dec) + u;
 }
 
 function seg(id, key, cb) {
-    const el = $(id);
-    el.addEventListener('click', ev => {
-        const b = ev.target.closest('button');
-        if (!b || b.disabled) return;
-        el.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
-        st[key] = b.dataset.v;
-        cb();
-    });
+  const el = $(id);
+  el.addEventListener('click', ev => {
+    const b = ev.target.closest('button');
+    if (!b || b.disabled) return;
+    el.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    st[key] = b.dataset.v;
+    cb();
+  });
 }
 seg('#segMetric', 'metric', drawChart);
 seg('#segRange', 'range', drawChart);
@@ -855,46 +897,46 @@ new ResizeObserver(es => { const w = Math.round(es[0].contentRect.width); if (w 
 let tapMsg = '', tapUntil = 0, taps = 0;
 const NS = 'http://www.w3.org/2000/svg', snd = { on: false, ctx: null };
 function beep(f1, f2, d = .09) {
-    if (!snd.on) return;
-    try {
-        snd.ctx = snd.ctx || new (window.AudioContext || window.webkitAudioContext)();
-        const c = snd.ctx, o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
-        o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + d);
-        g.gain.setValueAtTime(.12, t); g.gain.exponentialRampToValueAtTime(.001, t + d + .02);
-        o.connect(g); g.connect(c.destination); o.start(); o.stop(t + d + .03);
-    } catch (e) { }
+  if (!snd.on) return;
+  try {
+    snd.ctx = snd.ctx || new (window.AudioContext || window.webkitAudioContext)();
+    const c = snd.ctx, o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
+    o.frequency.setValueAtTime(f1, t); o.frequency.exponentialRampToValueAtTime(f2, t + d);
+    g.gain.setValueAtTime(.12, t); g.gain.exponentialRampToValueAtTime(.001, t + d + .02);
+    o.connect(g); g.connect(c.destination); o.start(); o.stop(t + d + .03);
+  } catch (e) { }
 }
 const once = (el, cls, ms) => { el.classList.remove(cls); void el.getBoundingClientRect(); el.classList.add(cls); setTimeout(() => el.classList.remove(cls), ms); };
 const svgPt = ev => { const r = scene.getBoundingClientRect(); return [(ev.clientX - r.left) * 600 / r.width, (ev.clientY - r.top) * 340 / r.height]; };
 const pick = a => a[Math.floor(Math.random() * a.length)];
 function say2(a, ms) { tapMsg = pick(a); tapUntil = Date.now() + ms; setSay(tapMsg); }
 function heart(x, y) {
-    const g = document.createElementNS(NS, 'g'), p = document.createElementNS(NS, 'path');
-    g.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
-    p.setAttribute('class', 'heart'); p.setAttribute('d', 'M0 -4 C-6 -12 -16 -4 0 9 C16 -4 6 -12 0 -4Z');
-    g.appendChild(p); $('#fxLayer').appendChild(g); setTimeout(() => g.remove(), 1500);
+  const g = document.createElementNS(NS, 'g'), p = document.createElementNS(NS, 'path');
+  g.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+  p.setAttribute('class', 'heart'); p.setAttribute('d', 'M0 -4 C-6 -12 -16 -4 0 9 C16 -4 6 -12 0 -4Z');
+  g.appendChild(p); $('#fxLayer').appendChild(g); setTimeout(() => g.remove(), 1500);
 }
 
 scene.addEventListener('click', ev => {
-    const [x, y] = svgPt(ev), egg = ev.target.closest('.egg'), hen = ev.target.closest('.pet');
-    if (egg) { once(egg, 'wob', 700); beep(700, 520); heart(x, y - 12); say2(['Ada yang bergerak!', 'Tok tok… sabar ya.', 'Telurnya sehat kok.'], 2400); return; }
-    if (!hen) return;
-    const m = scene.dataset.mood, n = scene.dataset.phase === 'malam';
-    taps++; $('#hint').textContent = `Dielus ${taps}×`;
-    once(scene, 'jump', 750); once(scene, 'flap', 900); beep(520, 780);
-    for (let i = 0; i < 3; i++) setTimeout(() => heart(x + (Math.random() - .5) * 60, y - 14), i * 130);
-    
-    if (!ioTData.hasData) { say2(['Masih nunggu sinyal...', 'ESP-nya belum nyambung.'], 2600); return; }
+  const [x, y] = svgPt(ev), egg = ev.target.closest('.egg'), hen = ev.target.closest('.pet');
+  if (egg) { once(egg, 'wob', 700); beep(700, 520); heart(x, y - 12); say2(['Ada yang bergerak!', 'Tok tok… sabar ya.', 'Telurnya sehat kok.'], 2400); return; }
+  if (!hen) return;
+  const m = scene.dataset.mood, n = scene.dataset.phase === 'malam';
+  taps++; $('#hint').textContent = `Dielus ${taps}×`;
+  once(scene, 'jump', 750); once(scene, 'flap', 900); beep(520, 780);
+  for (let i = 0; i < 3; i++) setTimeout(() => heart(x + (Math.random() - .5) * 60, y - 14), i * 130);
 
-    if (m === 'normal') { scene.dataset.happy = 'true'; setTimeout(() => scene.dataset.happy = 'false', 1500); }
-    say2(m === 'cold' ? ['Brrr… peluk dong!', 'Dingin… hangatkan aku!'] : m === 'hot' ? ['Panas… kipasin dong!', 'Huft… gerah banget!'] : n ? ['Zzz… eh, ada apa?', 'Ngantuk… pok pok.'] : ['Hehe, geli ih~', 'Pok pok! Makasih!', 'Aku lagi mengerami~', 'Telurnya aman kok!'], 2600);
+  if (!ioTData.hasData) { say2(['Masih nunggu sinyal...', 'ESP-nya belum nyambung.'], 2600); return; }
+
+  if (m === 'normal') { scene.dataset.happy = 'true'; setTimeout(() => scene.dataset.happy = 'false', 1500); }
+  say2(m === 'cold' ? ['Brrr… peluk dong!', 'Dingin… hangatkan aku!'] : m === 'hot' ? ['Panas… kipasin dong!', 'Huft… gerah banget!'] : n ? ['Zzz… eh, ada apa?', 'Ngantuk… pok pok.'] : ['Hehe, geli ih~', 'Pok pok! Makasih!', 'Aku lagi mengerami~', 'Telurnya aman kok!'], 2600);
 });
 
 $('#btnSnd').addEventListener('click', () => { snd.on = !snd.on; $('#btnSnd').textContent = 'Suara: ' + (snd.on ? 'nyala' : 'mati'); beep(600, 800); });
 const pups = $('#pups'), stage = document.querySelector('.stage');
 stage.addEventListener('pointermove', ev => {
-    const [x, y] = svgPt(ev), dx = x - 300, dy = y - 140, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 160);
-    pups.style.transform = `translate(${(dx / d * 3.2 * k).toFixed(2)}px,${(dy / d * 2.6 * k).toFixed(2)}px)`;
+  const [x, y] = svgPt(ev), dx = x - 300, dy = y - 140, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 160);
+  pups.style.transform = `translate(${(dx / d * 3.2 * k).toFixed(2)}px,${(dy / d * 2.6 * k).toFixed(2)}px)`;
 });
 stage.addEventListener('pointerleave', () => { pups.style.transform = 'translate(0,0)'; });
 setInterval(() => { if (scene.dataset.mood !== 'normal' || scene.dataset.eyes !== 'open' || scene.dataset.happy === 'true') return; once(scene, Math.random() < .5 ? 'tilt' : 'peck', 1300); }, 6500);
@@ -905,9 +947,9 @@ setInterval(() => { if (scene.dataset.mood !== 'normal' || scene.dataset.eyes !=
 modeUI();
 updateUI();
 drawChart();
-setInterval(updateUI, 1000); // Sinkronisasi jam dan UI animasi
-setInterval(fetchServerData, FETCH_INTERVAL_MS); // Rutin ambil data dari ESP
-fetchServerData(); // Panggil saat pertama kali load
+setInterval(updateUI, 1000);
+setInterval(fetchServerData, FETCH_INTERVAL_MS);
+fetchServerData();
 </script>
 
 </body>
